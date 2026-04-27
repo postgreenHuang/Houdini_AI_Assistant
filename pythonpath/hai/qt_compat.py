@@ -11,6 +11,7 @@ try:
         QSplitter, QFrame, QScrollArea, QSizePolicy, QToolButton,
         QStatusBar, QMenuBar, QToolBar, QTabWidget, QTextBrowser,
         QGroupBox, QFormLayout, QSlider, QPlainTextEdit,
+        QListWidget, QListWidgetItem, QMenu,
     )
     QT_VERSION = 6
 except ImportError:
@@ -25,6 +26,7 @@ except ImportError:
         QSplitter, QFrame, QScrollArea, QSizePolicy, QToolButton,
         QStatusBar, QMenuBar, QToolBar, QTabWidget, QTextBrowser,
         QGroupBox, QFormLayout, QSlider, QPlainTextEdit,
+        QListWidget, QListWidgetItem, QMenu,
     )
     QT_VERSION = 5
 
@@ -39,5 +41,6 @@ __all__ = [
     "QSplitter", "QFrame", "QScrollArea", "QSizePolicy", "QToolButton",
     "QStatusBar", "QMenuBar", "QToolBar", "QTabWidget", "QTextBrowser",
     "QGroupBox", "QFormLayout", "QSlider", "QPlainTextEdit",
+    "QListWidget", "QListWidgetItem", "QMenu",
     "QT_VERSION",
 ]
