@@ -8,8 +8,9 @@ from .base import ProviderInterface
 
 class OpenAIProvider(ProviderInterface):
 
-    def __init__(self, api_key, model="", provider_name="openai"):
+    def __init__(self, api_key, model="", provider_name="openai", api_url=""):
         super().__init__(api_key, model, provider_name)
+        self._custom_url = api_url
         self._setup_endpoints()
 
     def _setup_endpoints(self):
@@ -22,6 +23,11 @@ class OpenAIProvider(ProviderInterface):
         elif self.provider_name == "glm":
             self.api_base = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
             self.model = self.model or "glm-5.1"
+        elif self.provider_name == "custom":
+            self.api_base = self._custom_url
+            self.model = self.model or "custom-model"
+            if not self.api_base:
+                raise ValueError("Custom provider requires an API URL in settings.")
         else:
             self.api_base = "https://api.openai.com/v1/chat/completions"
             self.model = self.model or "gpt-4o"

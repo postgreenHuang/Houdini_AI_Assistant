@@ -12,12 +12,12 @@ from ..config import load_config, save_config, DEFAULT_CONFIG
 class SettingsDialog(QDialog):
     """Settings dialog for configuring the AI Assistant."""
 
-    PROVIDERS = ["claude", "openai", "deepseek", "gemini", "glm", "ollama", "lmstudio"]
+    PROVIDERS = ["claude", "openai", "deepseek", "gemini", "glm", "ollama", "lmstudio", "custom"]
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("AI Assistant - Settings")
-        self.setMinimumSize(500, 550)
+        self.setMinimumSize(550, 600)
         self.setStyleSheet(get_stylesheet())
         self._cfg = load_config()
         self._build_ui()
@@ -52,7 +52,7 @@ class SettingsDialog(QDialog):
         w = QWidget()
         layout = QVBoxLayout(w)
 
-        # Provider selector
+        # Active provider selector
         form = QFormLayout()
 
         self.provider_combo = QComboBox()
@@ -61,39 +61,42 @@ class SettingsDialog(QDialog):
         current = self._cfg.get("provider", "claude")
         idx = self.PROVIDERS.index(current) if current in self.PROVIDERS else 0
         self.provider_combo.setCurrentIndex(idx)
-        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         form.addRow("Active Provider:", self.provider_combo)
-
-        self.model_input = QLineEdit()
-        self.model_input.setPlaceholderText("Leave empty for default model")
-        self.model_input.setText(self._cfg.get("model", ""))
-        form.addRow("Model:", self.model_input)
 
         layout.addLayout(form)
 
-        # API keys for each provider
-        keys_group = QGroupBox("API Keys / URLs")
-        keys_layout = QFormLayout(keys_group)
+        # Per-provider config: URL + Key + Model for each
+        providers_cfg = self._cfg.get("providers", {})
+        self._provider_inputs = {}
 
-        keys = self._cfg.get("api_keys", {})
-
-        self.key_inputs = {}
         for p in self.PROVIDERS:
-            if p in ("ollama", "lmstudio"):
-                inp = QLineEdit()
-                inp.setPlaceholderText("http://localhost:{}".format("11434" if p == "ollama" else "1234"))
-                inp.setText(keys.get(p + "_url", ""))
-                self.key_inputs[p] = inp
-                keys_layout.addRow("{} URL:".format(p.title()), inp)
-            else:
-                inp = QLineEdit()
-                inp.setEchoMode(QLineEdit.Password)
-                inp.setPlaceholderText("Enter {} API Key".format(p.title()))
-                inp.setText(keys.get(p, ""))
-                self.key_inputs[p] = inp
-                keys_layout.addRow("{} Key:".format(p.title()), inp)
+            defaults = DEFAULT_CONFIG["providers"].get(p, {})
+            pcfg = providers_cfg.get(p, {})
 
-        layout.addWidget(keys_group)
+            group = QGroupBox(p.upper())
+            gform = QFormLayout(group)
+
+            url_input = QLineEdit()
+            url_input.setText(pcfg.get("url", defaults.get("url", "")))
+            gform.addRow("URL:", url_input)
+
+            key_input = QLineEdit()
+            key_input.setEchoMode(QLineEdit.Password)
+            key_input.setText(pcfg.get("api_key", ""))
+            gform.addRow("API Key:", key_input)
+
+            model_input = QLineEdit()
+            model_input.setText(pcfg.get("model", defaults.get("model", "")))
+            gform.addRow("Model:", model_input)
+
+            self._provider_inputs[p] = {
+                "url": url_input,
+                "api_key": key_input,
+                "model": model_input,
+            }
+
+            layout.addWidget(group)
+
         layout.addStretch()
         return w
 
@@ -122,11 +125,6 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(w)
 
         form = QFormLayout()
-
-        # Code execution
-        self.exec_check = QCheckBox("Allow code execution (run_python, run_hscript)")
-        self.exec_check.setChecked(self._cfg.get("allow_code_execution", False))
-        form.addRow(self.exec_check)
 
         # Permission level
         self.perm_combo = QComboBox()
@@ -157,30 +155,13 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return w
 
-    # ---- Events ----
-
-    def _on_provider_changed(self, index):
-        provider = self.provider_combo.currentData()
-        # Auto-set default model
-        defaults = {
-            "claude": "claude-sonnet-4-6-20250514",
-            "openai": "gpt-4o",
-            "deepseek": "deepseek-chat",
-            "gemini": "gemini-2.0-flash",
-            "glm": "glm-5.1",
-            "ollama": "llama3",
-            "lmstudio": "local-model",
-        }
-        if not self.model_input.text():
-            self.model_input.setPlaceholderText("Default: {}".format(defaults.get(provider, "")))
+    # ---- Save ----
 
     def _save(self):
         cfg = dict(self._cfg)
 
         cfg["provider"] = self.provider_combo.currentData()
-        cfg["model"] = self.model_input.text().strip()
         cfg["system_prompt"] = self.system_prompt.toPlainText().strip()
-        cfg["allow_code_execution"] = self.exec_check.isChecked()
         cfg["permission_level"] = self.perm_combo.currentData()
         cfg["language"] = self.lang_combo.currentData()
 
@@ -189,14 +170,19 @@ class SettingsDialog(QDialog):
         except ValueError:
             cfg["max_context_nodes"] = 50
 
-        # API keys
-        api_keys = cfg.get("api_keys", {})
-        for p, inp in self.key_inputs.items():
-            if p in ("ollama", "lmstudio"):
-                api_keys[p + "_url"] = inp.text().strip()
-            else:
-                api_keys[p] = inp.text().strip()
-        cfg["api_keys"] = api_keys
+        # Per-provider config
+        providers = {}
+        for p, inputs in self._provider_inputs.items():
+            providers[p] = {
+                "url": inputs["url"].text().strip(),
+                "api_key": inputs["api_key"].text().strip(),
+                "model": inputs["model"].text().strip(),
+            }
+        cfg["providers"] = providers
+
+        # Remove old flat format if present
+        cfg.pop("api_keys", None)
+        cfg.pop("model", None)
 
         save_config(cfg)
         self._cfg = cfg

@@ -46,7 +46,7 @@ def get_all_tools():
 _AI_TOOLS = {
     "get_selected_nodes", "get_node_info", "get_node_tree",
     "get_scene_info", "list_nodes", "get_parameter",
-    "run_python",
+    "run_python", "trace_errors",
 }
 
 
@@ -89,3 +89,4 @@ from . import node_ops  # noqa: E402, F401
 from . import param_ops  # noqa: E402, F401
 from . import scene_query  # noqa: E402, F401
 from . import exec_ops  # noqa: E402, F401
+from . import debug_ops  # noqa: E402, F401

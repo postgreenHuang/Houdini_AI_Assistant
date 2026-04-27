@@ -13,9 +13,11 @@ from ..qt_compat import (
     QApplication,
 )
 from ..ui.styles import get_stylesheet
+from ..ui.session_sidebar import SessionSidebar
 from ..agent import Agent
 from ..roles import get_role_names
 from ..config import load_config, save_config
+from ..session import create_session, save_session, load_session
 
 
 class ExternalEditorDialog(QDialog):
@@ -103,6 +105,7 @@ class ChatPanel(QWidget):
         super().__init__(parent)
         self._is_processing = False
         self._had_response = False
+        self._current_session_id = None
 
         # Connect signals to UI update methods (main thread)
         self._sig_response.connect(self._ui_add_response)
@@ -124,28 +127,29 @@ class ChatPanel(QWidget):
 
     def _setup_agent(self):
         cfg = load_config()
-        provider = cfg.get("provider", "")
-        api_key = ""
-        keys = cfg.get("api_keys", {})
-        if provider == "ollama":
-            api_key = keys.get("ollama_url", "http://localhost:11434")
-        elif provider == "lmstudio":
-            api_key = keys.get("lmstudio_url", "http://localhost:1234")
-        else:
-            api_key = keys.get(provider, "")
-
-        if api_key:
-            try:
-                self.agent.setup_provider(cfg)
-            except Exception:
-                pass
+        try:
+            self.agent.setup_provider(cfg)
+        except Exception:
+            pass
 
     # ---- UI construction ----
 
     def _build_ui(self):
         self.setStyleSheet(get_stylesheet())
 
-        layout = QVBoxLayout(self)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Session sidebar
+        self.sidebar = SessionSidebar(self)
+        self.sidebar.session_selected.connect(self._on_session_selected)
+        self.sidebar.new_chat_requested.connect(self._new_chat)
+        outer.addWidget(self.sidebar)
+
+        # Main chat area
+        main = QWidget()
+        layout = QVBoxLayout(main)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
@@ -166,16 +170,13 @@ class ChatPanel(QWidget):
         layout.addWidget(scroll, 1)
         self.scroll_area = scroll
 
-        # Welcome message
-        self._add_message("assistant",
-            "Hello! I'm your Houdini AI Assistant.\n\n"
-            "Select nodes and click **Analyze Selection** to let me see your scene, "
-            "or just type a question.\n\n"
-            "Use **ACPY:** prefix to enter action mode — I'll create and modify nodes for you."
-        )
-
         # Bottom bar
         layout.addWidget(self._build_bottom_bar())
+
+        outer.addWidget(main, 1)
+
+        # Start a new session
+        self._new_chat()
 
     def _build_top_bar(self):
         bar = QFrame()
@@ -187,6 +188,12 @@ class ChatPanel(QWidget):
         )
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(8, 4, 8, 4)
+
+        # New Chat
+        btn_new = QPushButton("+ New Chat")
+        btn_new.setToolTip("Start a new conversation")
+        btn_new.clicked.connect(self._new_chat)
+        layout.addWidget(btn_new)
 
         # Context status
         self.ctx_label = QLabel("Context: None")
@@ -243,6 +250,11 @@ class ChatPanel(QWidget):
         btn_analyze_sel.clicked.connect(self._analyze_selection)
         btn_row.addWidget(btn_analyze_sel)
 
+        btn_debug = QPushButton("Debug")
+        btn_debug.setToolTip("Debug selected nodes — trace errors upstream")
+        btn_debug.clicked.connect(self._debug_selection)
+        btn_row.addWidget(btn_debug)
+
         btn_row.addStretch()
 
         # Token counter
@@ -284,6 +296,9 @@ class ChatPanel(QWidget):
 
         content = QTextEdit()
         content.setReadOnly(True)
+        content.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
         content.setFrameShape(QFrame.NoFrame)
         content.setStyleSheet("background: transparent; border: none; padding: 0;")
         # Simple markdown: convert **bold** and newlines
@@ -326,6 +341,83 @@ class ChatPanel(QWidget):
         self._add_message("assistant",
             "Chat cleared. How can I help you?"
         )
+
+    # ---- Session management ----
+
+    def _new_chat(self):
+        """Start a new conversation session."""
+        # Save current session first
+        self._save_current_session()
+        # Create new session
+        self._current_session_id = create_session()
+        self.agent.reset()
+        self.token_label.setText("Tokens: 0 / 0")
+        # Clear messages
+        while self.msg_layout.count():
+            item = self.msg_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._add_message("assistant",
+            "Hello! I'm your Houdini AI Assistant.\n\n"
+            "Select nodes and click **Analyze Selection** to let me see your scene, "
+            "or just type a question.\n\n"
+            "Use **ACPY:** prefix to enter action mode — I'll create and modify nodes for you."
+        )
+        self.sidebar.refresh(highlight_id=self._current_session_id)
+
+    def _on_session_selected(self, session_id):
+        """Load a saved session."""
+        if session_id == self._current_session_id:
+            return
+        self._save_current_session()
+        data = load_session(session_id)
+        if data is None:
+            return
+        self._current_session_id = session_id
+        # Restore messages
+        while self.msg_layout.count():
+            item = self.msg_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.agent.set_messages(data.get("messages", []))
+        for msg in data.get("messages", []):
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role in ("user", "assistant") and content:
+                self._add_message(role, content)
+        # Restore tokens
+        usage = data.get("token_usage", {})
+        self.agent.total_input_tokens = usage.get("input", 0)
+        self.agent.total_output_tokens = usage.get("output", 0)
+        self.token_label.setText("Tokens: {} in / {} out".format(
+            self.agent.total_input_tokens, self.agent.total_output_tokens))
+        self.sidebar.refresh(highlight_id=session_id)
+
+    def _save_current_session(self):
+        """Auto-save the current session."""
+        if not self._current_session_id:
+            return
+        msgs = self.agent.get_messages()
+        if not msgs:
+            return
+        save_session(
+            self._current_session_id,
+            msgs,
+            token_usage=self.agent.get_token_usage(),
+        )
+
+    # ---- Debug ----
+
+    def _debug_selection(self):
+        """Analyze selected nodes for errors."""
+        if self._is_processing:
+            return
+        try:
+            self.agent.analyze_selection()
+            self.ctx_label.setText("Context: Selection")
+        except Exception:
+            pass
+        self._do_send("Debug the selected nodes. Use trace_errors to check for errors and warnings in the upstream chain, then analyze the root cause and suggest fixes.")
 
     # ---- Actions ----
 
@@ -421,6 +513,8 @@ class ChatPanel(QWidget):
 
     def _ui_on_done(self):
         self._set_processing(False)
+        self._save_current_session()
+        self.sidebar.refresh(highlight_id=self._current_session_id)
 
     def _ui_update_tokens(self, inp, out):
         self.token_label.setText("Tokens: {} in / {} out".format(inp, out))

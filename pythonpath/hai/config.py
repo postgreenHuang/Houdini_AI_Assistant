@@ -8,16 +8,48 @@ _CONFIG_FILE = os.path.join(_CONFIG_DIR, "config.json")
 
 DEFAULT_CONFIG = {
     "provider": "claude",
-    "api_keys": {
-        "claude": "",
-        "openai": "",
-        "deepseek": "",
-        "gemini": "",
-        "glm": "",
-        "ollama_url": "http://localhost:11434",
-        "lmstudio_url": "http://localhost:1234",
+    "providers": {
+        "claude": {
+            "api_key": "",
+            "url": "https://api.anthropic.com",
+            "model": "claude-sonnet-4-6-20250514",
+        },
+        "openai": {
+            "api_key": "",
+            "url": "https://api.openai.com/v1/chat/completions",
+            "model": "gpt-4o",
+        },
+        "deepseek": {
+            "api_key": "",
+            "url": "https://api.deepseek.com/v1/chat/completions",
+            "model": "deepseek-chat",
+        },
+        "gemini": {
+            "api_key": "",
+            "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            "model": "gemini-2.0-flash",
+        },
+        "glm": {
+            "api_key": "",
+            "url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            "model": "glm-5.1",
+        },
+        "ollama": {
+            "api_key": "",
+            "url": "http://localhost:11434/v1/chat/completions",
+            "model": "llama3",
+        },
+        "lmstudio": {
+            "api_key": "",
+            "url": "http://localhost:1234/v1/chat/completions",
+            "model": "local-model",
+        },
+        "custom": {
+            "api_key": "",
+            "url": "",
+            "model": "",
+        },
     },
-    "model": "",
     "allow_code_execution": False,
     "permission_level": "confirm",
     "max_context_nodes": 50,
@@ -40,7 +72,20 @@ def load_config():
             with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
             merged = dict(DEFAULT_CONFIG)
+            # Deep merge providers dict
+            if "providers" in saved:
+                merged["providers"] = dict(DEFAULT_CONFIG["providers"])
+                for k, v in saved["providers"].items():
+                    if isinstance(v, dict) and k in merged["providers"]:
+                        merged["providers"][k] = dict(merged["providers"][k])
+                        merged["providers"][k].update(v)
+                    else:
+                        merged["providers"][k] = v
+                saved.pop("providers")
+            # Top-level overrides
             merged.update(saved)
+            # Remove old flat format
+            merged.pop("api_keys", None)
             return merged
         except (json.JSONDecodeError, IOError):
             pass
@@ -58,19 +103,16 @@ def get_api_key(provider, cfg=None):
     """Return the API key for the given provider."""
     if cfg is None:
         cfg = load_config()
-    keys = cfg.get("api_keys", {})
-    return keys.get(provider, "")
+    return cfg.get("providers", {}).get(provider, {}).get("api_key", "")
 
 
 def get_active_provider(cfg=None):
-    """Return (provider_name, api_key_or_url, model) for the active provider."""
+    """Return (provider_name, api_key, model, url) for the active provider."""
     if cfg is None:
         cfg = load_config()
     provider = cfg.get("provider", "claude")
-    keys = cfg.get("api_keys", {})
-    model = cfg.get("model", "")
-    if provider == "ollama":
-        return provider, keys.get("ollama_url", "http://localhost:11434"), model or "llama3"
-    if provider == "lmstudio":
-        return provider, keys.get("lmstudio_url", "http://localhost:1234"), model or "local-model"
-    return provider, keys.get(provider, ""), model
+    p = cfg.get("providers", {}).get(provider, {})
+    api_key = p.get("api_key", "")
+    model = p.get("model", "")
+    url = p.get("url", "")
+    return provider, api_key, model, url

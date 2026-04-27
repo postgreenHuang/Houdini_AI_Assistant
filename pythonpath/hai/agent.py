@@ -40,19 +40,31 @@ class Agent:
         self.total_input_tokens = 0
         self.total_output_tokens = 0
 
+    def get_messages(self):
+        """Return current message list (for session saving)."""
+        return list(self.messages)
+
+    def set_messages(self, messages):
+        """Restore message list (for session loading)."""
+        self.messages = list(messages)
+
+    def get_token_usage(self):
+        """Return cumulative token usage."""
+        return {"input": self.total_input_tokens, "output": self.total_output_tokens}
+
     def setup_provider(self, cfg=None):
         """Initialize provider from config."""
         if cfg is None:
             cfg = load_config()
 
-        provider_name, api_key_or_url, model = get_active_provider(cfg)
-        if not api_key_or_url:
+        provider_name, api_key, model, url = get_active_provider(cfg)
+        if not api_key:
             raise ValueError(
                 "No API key configured for provider '{}'. "
                 "Please set it in Settings.".format(provider_name)
             )
 
-        self.provider = get_provider(provider_name, api_key_or_url, model)
+        self.provider = get_provider(provider_name, api_key, model, url)
         self.system_prompt = cfg.get("system_prompt", "")
 
     def set_context(self, context_text):

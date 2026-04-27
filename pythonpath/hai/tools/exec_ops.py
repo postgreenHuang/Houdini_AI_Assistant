@@ -15,9 +15,15 @@ def _run_python(code):
     namespace = {"hou": hou, "__builtins__": __builtins__}
 
     try:
-        exec(code, namespace)
+        hou.undo.enable()
+        hou.undo.begin("AI Assistant: run_python")
+        try:
+            exec(code, namespace)
+        finally:
+            hou.undo.end()
+
         output = stdout_capture.getvalue()
-        result = "OK"
+        result = "OK (Ctrl+Z to undo)"
         if output.strip():
             result += "\n--- output ---\n" + output.strip()
         return result
