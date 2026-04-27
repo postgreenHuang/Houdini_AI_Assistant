@@ -3,6 +3,32 @@
 import hou
 from .qt_compat import QMessageBox, QApplication
 
+
+def has_write_operations(tool_calls):
+    """Check if any tool call in a list is a write operation."""
+    write_ops = {
+        "create_node", "delete_node", "connect_nodes", "disconnect_node",
+        "rename_node", "copy_node", "set_parameter", "set_expression",
+        "set_keyframe", "run_python", "run_hscript",
+    }
+    return any(tc["name"] in write_ops for tc in tool_calls)
+
+
+def auto_save_hip():
+    """Save the current hip file to trigger Houdini's backup mechanism.
+
+    Only saves if the file has been saved before (has a path).
+    Returns True if saved, False if skipped (untitled/never saved).
+    """
+    try:
+        hip_path = hou.hipFile.path()
+        if hip_path and hip_path != "untitled.hip":
+            hou.hipFile.save()
+            return True
+    except Exception:
+        pass
+    return False
+
 # Operations that require user confirmation
 DANGEROUS_OPERATIONS = {
     "delete_node",

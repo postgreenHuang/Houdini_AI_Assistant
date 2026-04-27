@@ -40,6 +40,30 @@ def get_all_tools():
     ]
 
 
+# Tools exposed to the AI — query tools + run_python only.
+# Individual write tools (create_node, connect_nodes, etc.) are kept for
+# internal execution but hidden from the AI so it uses run_python instead.
+_AI_TOOLS = {
+    "get_selected_nodes", "get_node_info", "get_node_tree",
+    "get_scene_info", "list_nodes", "get_parameter",
+    "run_python",
+}
+
+
+def get_ai_tools():
+    """Return only the tools the AI should see (query + run_python)."""
+    return [
+        {
+            "name": t["name"],
+            "description": t["description"],
+            "parameters": t["parameters"],
+            "required": t["required"],
+        }
+        for t in _TOOLS.values()
+        if t["name"] in _AI_TOOLS
+    ]
+
+
 def execute_tool(name, arguments):
     """Execute a tool by name with the given arguments.
 
@@ -64,3 +88,4 @@ def tool_names():
 from . import node_ops  # noqa: E402, F401
 from . import param_ops  # noqa: E402, F401
 from . import scene_query  # noqa: E402, F401
+from . import exec_ops  # noqa: E402, F401

@@ -1,8 +1,13 @@
 """Chat Panel — main chat interface embedded as a Houdini Pane Tab."""
 
+import os
+import json
+import threading
+import tempfile
+import subprocess
 import hou
 from ..qt_compat import (
-    Qt, Signal, QWidget, QVBoxLayout, QHBoxLayout,
+    Qt, Signal, QWidget, QDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTextEdit, QComboBox,
     QFrame, QScrollArea, QSizePolicy, QPlainTextEdit,
     QApplication,
@@ -13,20 +18,107 @@ from ..roles import get_role_names
 from ..config import load_config, save_config
 
 
-class ChatPanel(QWidget):
-    """Main AI chat panel for Houdini."""
+class ExternalEditorDialog(QDialog):
+    """Open a temp file in system editor (Notepad) for CJK input, then read it back."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setWindowTitle("External Editor")
+        self.setMinimumWidth(360)
+        self.setStyleSheet(get_stylesheet())
+        self._text = ""
+
+        # Create temp file
+        tmp_dir = tempfile.gettempdir()
+        self._filepath = os.path.join(tmp_dir, "hai_input.txt")
+        with open(self._filepath, "w", encoding="utf-8") as f:
+            f.write("")
+
+        layout = QVBoxLayout(self)
+
+        info = QLabel("An editor window has opened.\n"
+                      "Type your message there, save (Ctrl+S), then click **Read & Send** below.")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self._cleanup_and_reject)
+        btn_row.addWidget(btn_cancel)
+
+        btn_send = QPushButton("Read & Send")
+        btn_send.setObjectName("sendButton")
+        btn_send.setDefault(True)
+        btn_send.clicked.connect(self._read_and_accept)
+        btn_row.addWidget(btn_send)
+
+        layout.addLayout(btn_row)
+
+        # Open system editor
+        self._proc = subprocess.Popen(["notepad", self._filepath])
+
+    def _read_and_accept(self):
+        try:
+            with open(self._filepath, "r", encoding="utf-8") as f:
+                self._text = f.read().strip()
+        except Exception:
+            self._text = ""
+        self._cleanup()
+        if self._text:
+            self.accept()
+
+    def _cleanup_and_reject(self):
+        self._cleanup()
+        self.reject()
+
+    def _cleanup(self):
+        try:
+            self._proc.terminate()
+        except Exception:
+            pass
+        try:
+            os.remove(self._filepath)
+        except Exception:
+            pass
+
+    @property
+    def text(self):
+        return self._text
+
+
+class ChatPanel(QWidget):
+    """Main AI chat panel for Houdini."""
+
+    # Signals for thread-safe UI updates (emitted from background thread,
+    # received on main thread by connected slots)
+    _sig_response = Signal(str)
+    _sig_tool_call = Signal(str, str)
+    _sig_error = Signal(str)
+    _sig_done = Signal()
+    _sig_token = Signal(int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._is_processing = False
+        self._had_response = False
+
+        # Connect signals to UI update methods (main thread)
+        self._sig_response.connect(self._ui_add_response)
+        self._sig_tool_call.connect(self._ui_add_tool_call)
+        self._sig_error.connect(self._ui_add_error)
+        self._sig_done.connect(self._ui_on_done)
+        self._sig_token.connect(self._ui_update_tokens)
+
         self.agent = Agent(
-            on_response=self._on_response,
-            on_tool_call=self._on_tool_call,
-            on_error=self._on_error,
-            on_token_update=self._on_token_update,
+            on_response=lambda text: self._sig_response.emit(text),
+            on_tool_call=lambda name, args: self._sig_tool_call.emit(name, json.dumps(args, default=str)),
+            on_error=lambda msg: self._sig_error.emit(msg),
+            on_token_update=lambda i, o: self._sig_token.emit(i, o),
         )
         self._setup_agent()
         self._build_ui()
-        self._is_processing = False
 
     # ---- Agent setup ----
 
@@ -158,6 +250,12 @@ class ChatPanel(QWidget):
         self.token_label.setObjectName("tokenLabel")
         btn_row.addWidget(self.token_label)
 
+        # External editor button (for Chinese/CJK input)
+        btn_input = QPushButton("Editor")
+        btn_input.setToolTip("Open external editor for CJK / Chinese input")
+        btn_input.clicked.connect(self._open_input_dialog)
+        btn_row.addWidget(btn_input)
+
         # Send button
         self.send_btn = QPushButton("Send")
         self.send_btn.setObjectName("sendButton")
@@ -237,21 +335,23 @@ class ChatPanel(QWidget):
         text = self.input_box.toPlainText().strip()
         if not text:
             return
-
         self.input_box.clear()
-        self._add_message("user", text)
+        self._do_send(text)
 
+    def _do_send(self, text):
+        """Send text to agent in a background thread."""
+        self._add_message("user", text)
         self._set_processing(True)
 
-        try:
-            result = self.agent.send_message(text)
-            if result and not self._had_response:
-                self._add_message("assistant", result)
-        except Exception as e:
-            self._add_message("assistant", "Error: {}".format(str(e)))
-        finally:
-            self._set_processing(False)
-            self._had_response = False
+        def run():
+            try:
+                self.agent.send_message(text)
+            except Exception as e:
+                self._sig_error.emit("Error: {}".format(str(e)))
+            finally:
+                self._sig_done.emit()
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _analyze_selection(self):
         if self._is_processing:
@@ -284,26 +384,31 @@ class ChatPanel(QWidget):
             # Reload agent with new config
             self._setup_agent()
 
+    def _open_input_dialog(self):
+        """Open external editor (Notepad) for CJK input."""
+        if self._is_processing:
+            return
+        dlg = ExternalEditorDialog(self)
+        if dlg.exec_():
+            self._do_send(dlg.text)
+
     def _set_processing(self, active):
         self._is_processing = active
         self._had_response = False
         self.send_btn.setEnabled(not active)
         self.send_btn.setText("Processing..." if active else "Send")
 
-    # ---- Agent callbacks ----
+    # ---- Signal slots (called on main thread, safe to update UI) ----
 
-    def _on_response(self, text):
+    def _ui_add_response(self, text):
         self._had_response = True
         self._add_message("assistant", text)
 
-    def _on_tool_call(self, tool_name, args):
-        import json
-        short = json.dumps(args, default=str)
-        if len(short) > 100:
-            short = short[:100] + "..."
+    def _ui_add_tool_call(self, tool_name, args_json):
+        short = args_json if len(args_json) <= 100 else args_json[:100] + "..."
         self._add_message("assistant", "Calling tool: **{}**({})".format(tool_name, short))
 
-    def _on_error(self, msg):
+    def _ui_add_error(self, msg):
         frame = QFrame()
         frame.setObjectName("errorMessage")
         fl = QVBoxLayout(frame)
@@ -314,7 +419,10 @@ class ChatPanel(QWidget):
         fl.addWidget(lbl)
         self.msg_layout.addWidget(frame)
 
-    def _on_token_update(self, inp, out):
+    def _ui_on_done(self):
+        self._set_processing(False)
+
+    def _ui_update_tokens(self, inp, out):
         self.token_label.setText("Tokens: {} in / {} out".format(inp, out))
 
 

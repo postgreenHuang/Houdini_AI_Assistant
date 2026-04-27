@@ -1,11 +1,11 @@
 """Agent core — message loop, tool dispatch, conversation management."""
 
 from .providers import get_provider
-from .tools import get_all_tools, execute_tool
+from .tools import get_ai_tools, execute_tool
 from .roles import build_system_prompt
 from .context import build_selection_context, build_scene_context
 from .acpy import is_acpy_prompt, strip_acpy_prefix, build_acpy_system_addition
-from .permissions import confirm_operation
+from .permissions import confirm_batch_operations, auto_save_hip, has_write_operations
 from .config import load_config, get_active_provider
 
 
@@ -95,9 +95,10 @@ class Agent:
         self.messages.append({"role": "user", "content": user_text})
 
         # Tool loop
-        tools = get_all_tools()
+        tools = get_ai_tools()
         final_text = ""
         cfg = load_config()
+        write_confirmed = False  # confirm once per conversation turn
 
         for round_num in range(self.max_tool_rounds):
             try:
@@ -156,28 +157,36 @@ class Agent:
             else:
                 self.messages.append({"role": "assistant", "content": text})
 
+            # Build operation list for batch confirmation
+            ops = []
             for tc in tool_calls:
                 tool_name = tc["name"]
                 tool_args = tc["arguments"]
-                tool_id = tc["id"]
-
+                desc = "{}({})".format(tool_name, _short_args(tool_args))
+                ops.append((tool_name, desc, tc["id"], tool_args))
                 self.on_tool_call(tool_name, tool_args)
 
-                # Permission check
-                desc = "{}({})".format(tool_name, _short_args(tool_args))
-                if not confirm_operation(tool_name, desc):
-                    result = "User denied this operation."
-                else:
-                    # Execute
-                    allow_exec = cfg.get("allow_code_execution", False)
-                    if tool_name in ("run_python", "run_hscript") and not allow_exec:
-                        result = "Code execution is disabled. Enable it in Settings to run scripts."
-                    else:
-                        success, result = execute_tool(tool_name, tool_args)
-                        if not success:
-                            self.on_error(result)
+            # Confirm write operations: once per conversation turn
+            has_writes = has_write_operations(tool_calls)
+            if has_writes and not write_confirmed:
+                auto_save_hip()
+                summaries = [(op[0], op[1]) for op in ops]
+                if not confirm_batch_operations(summaries):
+                    for op in ops:
+                        self.messages.append({
+                            "role": "tool_result",
+                            "content": "User denied this operation.",
+                            "tool_use_id": op[2],
+                        })
+                    continue
+                write_confirmed = True
 
-                # Add tool result
+            # Execute all tools sequentially
+            for tool_name, desc, tool_id, tool_args in ops:
+                success, result = execute_tool(tool_name, tool_args)
+                if not success:
+                    self.on_error(result)
+
                 self.messages.append({
                     "role": "tool_result",
                     "content": result,
