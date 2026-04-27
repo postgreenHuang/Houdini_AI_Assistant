@@ -10,13 +10,16 @@ from .config import load_config, get_active_provider
 
 
 class Agent:
-    """Manages conversation with AI, tool execution, and context."""
+    """State-machine agent: alternates between background HTTP and main-thread tools."""
 
-    def __init__(self, on_response=None, on_tool_call=None, on_error=None, on_token_update=None):
+    def __init__(self, on_response=None, on_tool_call=None, on_error=None,
+                 on_token_update=None, on_request_done=None):
         self.on_response = on_response or (lambda t: None)
         self.on_tool_call = on_tool_call or (lambda n, a: None)
         self.on_error = on_error or (lambda e: None)
         self.on_token_update = on_token_update or (lambda i, o: None)
+        # Called when an HTTP round finishes — triggers main-thread processing
+        self.on_request_done = on_request_done or (lambda: None)
 
         self.messages = []
         self.total_input_tokens = 0
@@ -26,6 +29,13 @@ class Agent:
         self.role = "assistant"
         self.context_text = ""
         self.max_tool_rounds = 10
+
+        # State for the conversation loop
+        self._user_text = ""
+        self._sys_prompt = ""
+        self._write_confirmed = False
+        self._tools = []
+        self._active = False
 
     def reset(self):
         self.messages = []
@@ -44,14 +54,12 @@ class Agent:
     def setup_provider(self, cfg=None):
         if cfg is None:
             cfg = load_config()
-
         provider_name, api_key, model, url = get_active_provider(cfg)
         if not api_key:
             raise ValueError(
                 "No API key configured for provider '{}'. "
                 "Please set it in Settings.".format(provider_name)
             )
-
         self.provider = get_provider(provider_name, api_key, model, url)
         self.system_prompt = cfg.get("system_prompt", "")
 
@@ -66,25 +74,10 @@ class Agent:
         self.context_text = build_scene_context()
         return self.context_text
 
-    def _run_tool_on_main_thread(self, tool_name, tool_args):
-        """Execute a single tool on the main thread via hou.ui API."""
-        import hou
+    # ---- State machine: start conversation ----
 
-        def _do():
-            return execute_tool(tool_name, tool_args)
-
-        try:
-            return hou.ui.executeInMainThreadWithResult(_do)
-        except Exception:
-            # Fallback: try direct execution (might be already on main thread)
-            return execute_tool(tool_name, tool_args)
-
-    def send_message(self, user_text):
-        """Send a user message and process the full response loop.
-
-        Designed to run on a background thread. HTTP requests here,
-        tool execution delegated to main thread via hou.ui API.
-        """
+    def start_conversation(self, user_text):
+        """Initialize state and kick off the first HTTP request (background)."""
         if self.provider is None:
             self.setup_provider()
 
@@ -92,58 +85,62 @@ class Agent:
         if acpy_active:
             user_text = strip_acpy_prefix(user_text)
 
-        sys_prompt = build_system_prompt(
+        self._sys_prompt = build_system_prompt(
             base_prompt=self.system_prompt,
             role_id=self.role,
             context=self.context_text,
         )
         if acpy_active:
-            sys_prompt += build_acpy_system_addition()
+            self._sys_prompt += build_acpy_system_addition()
 
         self.messages.append({"role": "user", "content": user_text})
+        self._tools = get_ai_tools()
+        self._write_confirmed = False
+        self._active = True
 
-        tools = get_ai_tools()
-        final_text = ""
-        cfg = load_config()
-        write_confirmed = False
+        # Start first HTTP round
+        self._start_http_round()
 
-        for round_num in range(self.max_tool_rounds):
+    def _start_http_round(self):
+        """Launch HTTP request in a background thread."""
+        import threading
+
+        messages = list(self.messages)
+        tools = self._tools
+        sys_prompt = self._sys_prompt
+        provider = self.provider
+
+        def http_request():
             try:
-                response = self.provider.send_message(
-                    messages=self.messages,
+                response = provider.send_message(
+                    messages=messages,
                     tools=tools if tools else None,
                     system_prompt=sys_prompt,
                 )
+                self._on_http_response(response)
             except Exception as e:
-                error_msg = "AI Provider Error: {}".format(str(e))
-                self.on_error(error_msg)
-                if self.messages and self.messages[-1]["role"] == "user":
-                    self.messages.pop()
-                return error_msg
+                self.on_error("AI Provider Error: {}".format(str(e)))
+                self._active = False
+                self.on_request_done()
 
-            usage = response.get("usage", {})
-            self.total_input_tokens += usage.get("input_tokens", 0)
-            self.total_output_tokens += usage.get("output_tokens", 0)
-            self.on_token_update(self.total_input_tokens, self.total_output_tokens)
+        threading.Thread(target=http_request, daemon=True).start()
 
-            text = response.get("content", "")
-            tool_calls = response.get("tool_calls", [])
+    def _on_http_response(self, response):
+        """Called from background thread when HTTP response arrives."""
+        # Track tokens
+        usage = response.get("usage", {})
+        self.total_input_tokens += usage.get("input_tokens", 0)
+        self.total_output_tokens += usage.get("output_tokens", 0)
+        self.on_token_update(self.total_input_tokens, self.total_output_tokens)
 
-            if text:
-                final_text = text
-                self.on_response(text)
+        text = response.get("content", "")
+        tool_calls = response.get("tool_calls", [])
 
-            if not tool_calls:
-                if "raw_assistant" in response:
-                    self.messages.append({
-                        "role": "assistant",
-                        "content": text,
-                        "tool_calls": response["raw_assistant"].get("tool_calls"),
-                    })
-                else:
-                    self.messages.append({"role": "assistant", "content": text})
-                break
+        if text:
+            self.on_response(text)
 
+        if not tool_calls:
+            # No tools — store assistant message and finish
             if "raw_assistant" in response:
                 self.messages.append({
                     "role": "assistant",
@@ -152,42 +149,75 @@ class Agent:
                 })
             else:
                 self.messages.append({"role": "assistant", "content": text})
+            self._active = False
+            self.on_request_done()
+            return
 
-            ops = []
-            for tc in tool_calls:
-                tool_name = tc["name"]
-                tool_args = tc["arguments"]
-                desc = "{}({})".format(tool_name, _short_args(tool_args))
-                ops.append((tool_name, desc, tc["id"], tool_args))
-                self.on_tool_call(tool_name, tool_args)
+        # Store assistant message with tool calls
+        if "raw_assistant" in response:
+            self.messages.append({
+                "role": "assistant",
+                "content": text,
+                "tool_calls": response["raw_assistant"].get("tool_calls"),
+            })
+        else:
+            self.messages.append({"role": "assistant", "content": text})
 
-            has_writes = has_write_operations(tool_calls)
-            if has_writes and not write_confirmed:
-                auto_save_hip()
-                summaries = [(op[0], op[1]) for op in ops]
-                if not confirm_batch_operations(summaries):
-                    for op in ops:
-                        self.messages.append({
-                            "role": "tool_result",
-                            "content": "User denied this operation.",
-                            "tool_use_id": op[2],
-                        })
-                    continue
-                write_confirmed = True
+        # Store tool calls for main-thread execution
+        self._pending_ops = []
+        for tc in tool_calls:
+            tool_name = tc["name"]
+            tool_args = tc["arguments"]
+            self._pending_ops.append((tool_name, tc["id"], tool_args))
+            self.on_tool_call(tool_name, tool_args)
 
-            # Execute tools on main thread via hou.ui API
-            for tool_name, desc, tool_id, tool_args in ops:
-                success, result = self._run_tool_on_main_thread(tool_name, tool_args)
-                if not success:
-                    self.on_error(result)
+        # Signal main thread to process tool calls
+        self.on_request_done()
 
-                self.messages.append({
-                    "role": "tool_result",
-                    "content": result,
-                    "tool_use_id": tool_id,
-                })
+    def execute_pending_tools(self):
+        """Called on main thread after on_request_done signal."""
+        if not self._active or not hasattr(self, '_pending_ops'):
+            return
 
-        return final_text
+        ops = self._pending_ops
+        del self._pending_ops
+
+        # Confirm write operations
+        has_writes = has_write_operations(
+            [{"name": n, "arguments": a} for n, _, a in ops]
+        )
+        if has_writes and not self._write_confirmed:
+            auto_save_hip()
+            summaries = [
+                ("{}".format(name), "{}({})".format(name, _short_args(args)))
+                for name, _, args in ops
+            ]
+            if not confirm_batch_operations(summaries):
+                for _, tool_id, _ in ops:
+                    self.messages.append({
+                        "role": "tool_result",
+                        "content": "User denied this operation.",
+                        "tool_use_id": tool_id,
+                    })
+                # Continue to next round
+                self._start_http_round()
+                return
+            self._write_confirmed = True
+
+        # Execute tools on main thread
+        for tool_name, tool_id, tool_args in ops:
+            success, result = execute_tool(tool_name, tool_args)
+            if not success:
+                self.on_error(result)
+            self.messages.append({
+                "role": "tool_result",
+                "content": result,
+                "tool_use_id": tool_id,
+            })
+
+        # Next HTTP round
+        if self._active:
+            self._start_http_round()
 
 
 def _short_args(args, max_len=80):

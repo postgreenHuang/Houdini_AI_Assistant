@@ -2,7 +2,6 @@
 
 import os
 import json
-import threading
 import tempfile
 import subprocess
 import hou
@@ -98,6 +97,7 @@ class ChatPanel(QWidget):
     _sig_error = Signal(str)
     _sig_done = Signal()
     _sig_token = Signal(int, int)
+    _sig_tools_ready = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -105,17 +105,21 @@ class ChatPanel(QWidget):
         self._had_response = False
         self._current_session_id = None
 
+        # UI-only signals (text display, safe cross-thread)
         self._sig_response.connect(self._ui_add_response)
         self._sig_tool_call.connect(self._ui_add_tool_call)
         self._sig_error.connect(self._ui_add_error)
         self._sig_done.connect(self._ui_on_done)
         self._sig_token.connect(self._ui_update_tokens)
+        # Tool execution trigger — main thread picks up pending tools
+        self._sig_tools_ready.connect(self._ui_execute_tools)
 
         self.agent = Agent(
             on_response=lambda text: self._sig_response.emit(text),
             on_tool_call=lambda name, args: self._sig_tool_call.emit(name, json.dumps(args, default=str)),
             on_error=lambda msg: self._sig_error.emit(msg),
             on_token_update=lambda i, o: self._sig_token.emit(i, o),
+            on_request_done=lambda: self._sig_tools_ready.emit(),
         )
         self._setup_agent()
         self._build_ui()
@@ -434,19 +438,10 @@ class ChatPanel(QWidget):
         self._do_send(text)
 
     def _do_send(self, text):
-        """Send text to agent in a background thread."""
+        """Start agent conversation — state machine handles the rest."""
         self._add_message("user", text)
         self._set_processing(True)
-
-        def run():
-            try:
-                self.agent.send_message(text)
-            except Exception as e:
-                self._sig_error.emit("Error: {}".format(str(e)))
-            finally:
-                self._sig_done.emit()
-
-        threading.Thread(target=run, daemon=True).start()
+        self.agent.start_conversation(text)
 
     def _analyze_selection(self):
         if self._is_processing:
@@ -520,6 +515,8 @@ class ChatPanel(QWidget):
         self.msg_layout.addWidget(frame)
 
     def _ui_on_done(self):
+        if self.agent._active:
+            return  # Still running, don't finalize yet
         self._set_processing(False)
         try:
             self._save_current_session()
@@ -529,6 +526,18 @@ class ChatPanel(QWidget):
             self.sidebar.refresh(highlight_id=self._current_session_id)
         except Exception:
             pass
+
+    def _ui_execute_tools(self):
+        """Main thread: execute pending tools, then check if done."""
+        if not self.agent._active:
+            self._sig_done.emit()
+            return
+        try:
+            self.agent.execute_pending_tools()
+        except Exception as e:
+            self._ui_add_error("Tool execution error: {}".format(str(e)))
+        if not self.agent._active:
+            self._sig_done.emit()
 
     def _ui_update_tokens(self, inp, out):
         self.token_label.setText("Tokens: {} in / {} out".format(inp, out))
