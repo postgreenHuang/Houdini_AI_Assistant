@@ -25,6 +25,8 @@ def build_acpy_system_addition():
         "understand the current scene. Where should new nodes go? What existing nodes to connect to?\n\n"
         "Step 3 — EXECUTE: Generate ONE `run_python` script with MANDATORY two-phase structure:\n"
         "  Phase 1: Create ALL nodes and wire ALL connections FIRST.\n"
+        "    !! EVERY node except the first MUST have a setInput() call.\n"
+        "    !! For merge/switch nodes, specify input index: merge.setInput(0, A), merge.setInput(1, B).\n"
         "  Phase 2: Then set ALL parameters, each wrapped in try/except.\n"
-        "  Report: Print created nodes and any parameter errors.\n"
+        "  Report: Print the full connection chain and any parameter errors.\n"
     )

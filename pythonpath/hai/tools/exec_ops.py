@@ -25,6 +25,10 @@ register_tool(
         "MANDATORY two-phase script structure:\n"
         "Phase 1 — Create ALL nodes and wire ALL connections FIRST.\n"
         "Phase 2 — Then set ALL parameters, wrapped in try/except.\n\n"
+        "!! CRITICAL: EVERY node (except the first) MUST be connected via setInput().\n"
+        "A script that creates nodes without wiring them is BROKEN.\n"
+        "N nodes in a chain = N-1 setInput calls. Merges need more.\n"
+        "For merge/switch: specify input index — merge.setInput(0, A), merge.setInput(1, B).\n\n"
         "Do NOT mix node creation with parameter setting. "
         "Complete the network topology before touching any parameter."
     ),
