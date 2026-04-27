@@ -78,7 +78,92 @@ def build_system_prompt(base_prompt="", role_id="assistant", context=""):
     return "\n".join(parts)
 
 
-def _default_base_prompt():
+def _node_knowledge_base():
+    """Houdini node quick reference for AI — common SOP nodes with key parameters."""
+    return (
+        "\n## Houdini Node Quick Reference\n"
+        "Use this when deciding which nodes to create and what parameters they have.\n"
+        "Format: node_type(key_params) — inputs description\n\n"
+
+        "### Geometry Generators (no inputs needed)\n"
+        "- **box**(sizex,y,z | scale | rows,cols) — 0 inputs\n"
+        "- **sphere**(rad | rows,cols | type: 0=sphere,1=geo) — 0 inputs\n"
+        "- **grid**(sizex,y | rows,cols | center) — 0 inputs\n"
+        "- **tube**(rad | height | rows,cols | orient) — 0 inputs\n"
+        "- **torus**(rad | rows,cols | orient) — 0 inputs\n"
+        "- **platonic**(type: 0=tet,1=cube,2=oct,4=ico) — 0 inputs\n"
+        "- **line**(dist | points | direction) — 0 inputs\n"
+        "- **circle**(rad | type: 1=polygon) — 0 inputs\n"
+        "- **testgeometry_bunny** — 0 inputs\n\n"
+
+        "### Deformers & Modifiers (1 input)\n"
+        "- **mountain**(height | freq | offset | pulldir) — 1 input\n"
+        "- **polyextrude**(dist | divisions | insetscale) — 1 input\n"
+        "- **extrude**(dist | divisions) — 1 input\n"
+        "- **subdivide**(depth | algorithm) — 1 input\n"
+        "- **smooth**(numiterations) — 1 input\n"
+        "- **dissolve** — 1 input\n"
+        "- **divide**(remove: 1=shared edges) — 1 input\n"
+        "- **facet**(unique: toggle) — 1 input\n"
+        "- **normal**(type: 0=point,1=vertex,2=prim) — 1 input\n"
+        "- **peak**(distance | group) — 1 input\n"
+        "- **polyreduce**(targetop: 0=percentage,1=target | percentage) — 1 input\n"
+        "- **resample**(length | subdivisions) — 1 input\n"
+        "- **sweep** — 2 inputs (cross-section, backbone curve)\n\n"
+
+        "### Copy & Instance (2 inputs)\n"
+        "- **copytopoints**(target | source) — input0: template points, input1: geometry to copy\n"
+        "- **copy**(ncopies) — input0: geometry to copy\n"
+        "- **instance** — input0: instance geometry\n\n"
+
+        "### Multi-Input Combine\n"
+        "- **merge** — N inputs, combines geometry. Use setInput(0,A), setInput(1,B)...\n"
+        "- **switch**(input | index) — N inputs, selects one. switch.parm('input').set(1)\n"
+        "- **blend**(numblends) — N inputs, blends between\n"
+        "- **boolean**(input | operation: 0=union,1=intersect,2=subtract) — 2 inputs\n"
+        "  boolean.setInput(0, meshA), boolean.setInput(1, meshB)\n\n"
+
+        "### Point Operations (1 input)\n"
+        "- **scatter**(npoints | seed | forceprimgroup) — 1 input\n"
+        "- **sort**(pointsort: 0=x,1=y,2=z,3=shift) — 1 input\n"
+        "- **group**(crname | grouptype) — 1 input\n"
+        "- **delete**(group | entity) — 1 input\n"
+        "- **blast**(group | grouptype) — 1 input\n"
+        "- **wrangle**(snippet | class: 0=point,1=prim,2=vertex) — 1 input (aka attribwrangle)\n"
+        "- **vexsnippet** — alias for wrangle\n\n"
+
+        "### VOP Nodes (1 input, double-click to enter VOP network)\n"
+        "- **vopsop** — VEX operator SOP, 1 input\n\n"
+
+        "### Object Merge & Reference\n"
+        "- **object_merge**(numobj | objpath1..N) — 0 inputs, pulls from other networks\n"
+        "  objmerge.parm('objpath1').set('/obj/geo1/box1')\n\n"
+
+        "### Utility\n"
+        "- **null** — 1 input, end-of-chain marker. ALWAYS cap chains with this.\n"
+        "- **output**(outputidx) — 1 input, subnet output\n"
+        "- **subnet** — container, double-click to enter. 4 inputs by default.\n"
+        "- **lod** — level of detail switch\n\n"
+
+        "### Volumes & Simulation\n"
+        "- **vdbfrompolygons**(voxelsize | group) — 1 input\n"
+        "- **vdbreshape**(vdboperation: 0=erode,1=dilate,2=smooth) — 1 input\n"
+        "- **particlesfluidsurface** — 1 input\n"
+        "- **dopimport**(doppath | objpath) — 0+ inputs\n\n"
+
+        "### Key HOM API Patterns\n"
+        "- Create: `node = parent.createNode('type', 'name')` (name is optional)\n"
+        "- Connect: `child.setInput(input_index, parent_node)`\n"
+        "- Parameter: `node.parm('name').set(value)`\n"
+        "- Expression: `node.parm('name').setExpression('ch(\"../path\")')`\n"
+        "- Layout: `node.moveToGoodPosition()` or `parent.layoutChildren()`\n"
+        "- Display: `node.setDisplayFlag(True)` — sets the display node\n"
+        "- Render: `node.setRenderFlag(True)` — sets the render node\n"
+        "- Bypass: `node.bypass(True)` — bypass a node\n"
+        "- Delete: `node.destroy()` — remove a node\n"
+        "- Find: `hou.node('/path')` or `parent.node('name')`\n"
+        "- Children: `parent.children()` or `parent.allSubChildren()`\n"
+    )
     return (
         "You are an AI assistant embedded inside SideFX Houdini.\n"
         "You help users work with their Houdini scenes.\n\n"
@@ -173,5 +258,9 @@ def _default_base_prompt():
         "- ALWAYS cap the chain with a Null node at the end.\n"
         "- ALWAYS include a report with print() showing the full connection chain.\n"
         "- If parameter errors are reported, offer to fix them in a follow-up run_python call.\n"
-        "- Respond in the same language the user uses.\n"
+        "- After execution, the system auto-checks for disconnected nodes. Fix any warnings.\n"
+        "- Respond in the same language the user uses.\n\n"
+
+        + _node_knowledge_base()
+    )
     )
