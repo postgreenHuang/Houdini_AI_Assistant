@@ -503,9 +503,13 @@ class ChatPanel(QWidget):
         self._add_message("assistant", text)
 
     def _ui_add_tool_call(self, tool_name, args_json):
-        # Special signal: flush tool queue on main thread
         if tool_name == "__flush__":
-            self.agent.flush_tool_queue()
+            try:
+                self.agent.flush_tool_queue()
+            except Exception as e:
+                self._ui_add_error("Tool execution error: {}".format(e))
+                self.agent._tool_results = [(False, str(e))]
+                self.agent._tool_event.set()
             return
         short = args_json if len(args_json) <= 100 else args_json[:100] + "..."
         self._add_message("assistant", "Calling tool: **{}**({})".format(tool_name, short))
@@ -528,8 +532,14 @@ class ChatPanel(QWidget):
 
     def _ui_on_done(self):
         self._set_processing(False)
-        self._save_current_session()
-        self.sidebar.refresh(highlight_id=self._current_session_id)
+        try:
+            self._save_current_session()
+        except Exception:
+            pass
+        try:
+            self.sidebar.refresh(highlight_id=self._current_session_id)
+        except Exception:
+            pass
 
     def _ui_update_tokens(self, inp, out):
         self.token_label.setText("Tokens: {} in / {} out".format(inp, out))

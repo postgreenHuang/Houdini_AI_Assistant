@@ -1,36 +1,18 @@
 """Script execution tools — run Python code in Houdini's environment."""
 
-import sys
-import io
 import traceback
 import hou
 from . import register_tool
 
 
 def _run_python(code):
-    stdout_capture = io.StringIO()
-    old_stdout = sys.stdout
-    sys.stdout = stdout_capture
-
     namespace = {"hou": hou, "__builtins__": __builtins__}
 
     try:
         exec(code, namespace)
-
-        output = stdout_capture.getvalue()
-        result = "OK"
-        if output.strip():
-            result += "\n--- output ---\n" + output.strip()
-        return result
+        return "OK"
     except Exception:
-        error = traceback.format_exc()
-        output = stdout_capture.getvalue()
-        parts = ["Error:\n", error]
-        if output.strip():
-            parts.append("\n--- output before error ---\n" + output.strip())
-        return "".join(parts)
-    finally:
-        sys.stdout = old_stdout
+        return "Error:\n" + traceback.format_exc()
 
 
 register_tool(
