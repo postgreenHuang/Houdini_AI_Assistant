@@ -23,7 +23,8 @@ def build_acpy_system_addition():
         "and key parameters. Show a simple chain diagram like: grid -> mountain -> null.\n\n"
         "Step 2 — INSPECT: Use get_selected_nodes, get_scene_info, or list_nodes to "
         "understand the current scene. Where should new nodes go? What existing nodes to connect to?\n\n"
-        "Step 3 — EXECUTE: Generate ONE `run_python` script that creates everything. "
-        "Use Python variables for node references. Wire with setInput. Set parameters. "
-        "Add Null at end. Include print() for the report.\n"
+        "Step 3 — EXECUTE: Generate ONE `run_python` script with MANDATORY two-phase structure:\n"
+        "  Phase 1: Create ALL nodes and wire ALL connections FIRST.\n"
+        "  Phase 2: Then set ALL parameters, each wrapped in try/except.\n"
+        "  Report: Print created nodes and any parameter errors.\n"
     )
