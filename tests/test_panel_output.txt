@@ -1,0 +1,53 @@
+=== Desktop methods ===
+  createFloatingPane
+  createFloatingPaneTab
+  createFloatingPanel
+  currentPaneTabs
+  displayHelp
+  displayHelpPath
+  displayHelpPyPanel
+  displaySideHelp
+  findPane
+  findPaneTab
+  floatingPaneTabs
+  floatingPanels
+  name
+  paneTabOfType
+  paneTabUnderCursor
+  paneTabs
+  paneUnderCursor
+  panes
+  setAsCurrent
+  shelfDock
+  this
+  thisown
+
+=== Try getting a pane ===
+  currentPane : False
+  panes : True
+  paneTabs : True
+  findPane : True
+  paneAt : False
+
+=== desktop.paneTabs() ===
+  type: tuple
+  count: 14
+  first type: PathBasedPaneTab
+  methods: ['cd', 'clone', 'close', 'contentSize', 'currentNode', 'displayRadialMenu
+', 'floatingPanel', 'hasNetworkControls', 'isCurrentTab', 'isFloating', 'isPin', 'is
+ShowingNetworkControls', 'linkGroup', 'name', 'pane', 'pwd', 'qtParentWindow', 'qtSc
+reenGeometry', 'setCurrentNode', 'setIsCurrentTab', 'setLinkGroup', 'setName', 'setP
+in', 'setPwd', 'setShowNetworkControls', 'setType', 'showNetworkControls', 'size', '
+this', 'thisown', 'tools', 'type']
+
+=== desktop.panes() ===
+  type: tuple
+  count: 4
+  first type: Pane
+  methods: ['createTab', 'currentTab', 'desktop', 'floatingPanel', 'getSplitChild', 
+'getSplitDirection', 'getSplitFraction', 'getSplitParent', 'id', 'isMaximized', 'isS
+howingPaneTabs', 'isShowingPaneTabsStow', 'isSplit', 'isSplitMaximized', 'isSplitMin
+imized', 'qtParentWindow', 'qtScreenGeometry', 'setIsMaximized', 'setIsSplitMaximize
+d', 'setShowPaneTabs', 'setSplitDirection', 'setSplitFraction', 'showPaneTabs', 'sho
+wPaneTabsStow', 'splitHorizontally', 'splitRotate', 'splitSwap', 'splitVertically', 
+'tabOfType', 'tabs', 'this', 'thisown']

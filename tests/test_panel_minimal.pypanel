@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pythonPanelDocument>
+    <interface name="hai_test" label="AI Test">
+        <help><![CDATA[Minimal test panel.]]></help>
+        <script><![CDATA[
+from PySide2.QtWidgets import QLabel
+def createInterface():
+    return QLabel("Hello from Python Panel!")
+]]></script>
+    </interface>
+</pythonPanelDocument>

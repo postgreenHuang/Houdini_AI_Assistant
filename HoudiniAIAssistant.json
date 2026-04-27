@@ -1,0 +1,11 @@
+{
+    "enable": true,
+    "env": [
+        {
+            "HOUDINI_PATH": {
+                "value": "D:/Projects/HoudiniAIAssistant",
+                "method": "append"
+            }
+        }
+    ]
+}
