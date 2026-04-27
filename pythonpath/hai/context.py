@@ -10,36 +10,43 @@ def build_selection_context():
     if not nodes:
         return "No nodes currently selected."
 
-    parts = []
+    lines = ["## Selected Nodes\n"]
     for n in nodes:
-        info = _serialize_node(n, include_parms=True, depth=0)
-        parts.append(info)
+        lines.append(_format_node_compact(n, include_parms=True))
 
-    return "## Selected Nodes\n\n" + json.dumps(parts, indent=2, default=str)
+    return "\n".join(lines)
 
 
 def build_scene_context(max_nodes=50):
     """Build a broad context of the entire scene."""
-    parts = {
-        "hip_file": hou.hipFile.path(),
-        "frame": hou.frame(),
-        "fps": hou.fps(),
-        "selection": [],
-        "top_level": [],
-    }
+    lines = [
+        "## Scene Context",
+        "File: {}".format(hou.hipFile.path()),
+        "Frame: {} / FPS: {}".format(hou.frame(), hou.fps()),
+    ]
 
     # Selection
     selected = hou.selectedNodes()
-    for n in selected[:20]:
-        parts["selection"].append(_serialize_node(n, include_parms=True, depth=0))
+    if selected:
+        lines.append("\n### Selected")
+        for n in selected[:10]:
+            lines.append(_format_node_compact(n, include_parms=True))
 
     # Top-level obj nodes
+    lines.append("\n### /obj Network")
     obj = hou.node("/obj")
     if obj:
         for child in obj.children()[:max_nodes]:
-            parts["top_level"].append(_serialize_node(child, include_parms=False, depth=0))
+            lines.append(_format_node_compact(child, include_parms=False))
+            # Show children inside geo/subnet
+            try:
+                if child.isNetwork() and child.children():
+                    for sub in child.children()[:30]:
+                        lines.append("    " + _format_node_compact(sub, include_parms=False))
+            except Exception:
+                pass
 
-    return "## Scene Context\n\n" + json.dumps(parts, indent=2, default=str)
+    return "\n".join(lines)
 
 
 def build_context_for_path(node_path, depth=1):
@@ -48,77 +55,95 @@ def build_context_for_path(node_path, depth=1):
     if node is None:
         return "Node '{}' not found.".format(node_path)
 
-    info = _serialize_node(node, include_parms=True, depth=depth)
-    return "## Node Context\n\n" + json.dumps(info, indent=2, default=str)
+    lines = ["## Node: {}".format(node_path)]
+    lines.append(_format_node_compact(node, include_parms=True))
+
+    if depth > 0:
+        try:
+            children = node.children()
+            if children:
+                lines.append("\n### Children")
+                for c in children[:30]:
+                    lines.append("  " + _format_node_compact(c, include_parms=True))
+        except Exception:
+            pass
+
+    return "\n".join(lines)
 
 
-def _serialize_node(node, include_parms=True, depth=0):
-    """Serialize a single node to a dict."""
-    info = {
-        "path": node.path(),
-        "name": node.name(),
-        "type": node.type().name(),
-        "category": node.type().category().name() if node.type().category() else "Unknown",
-    }
+def _format_node_compact(node, include_parms=False):
+    """Format a node as a single compact line with connection info."""
+    type_name = node.type().name()
+    name = node.name()
+    path = node.path()
 
-    # Status
-    try:
-        if node.isNetwork():
-            info["is_network"] = True
-    except Exception:
-        pass
+    # Build connection string
+    inputs = node.inputs()
+    inp_parts = []
+    for i, inp in enumerate(inputs):
+        if inp is not None:
+            inp_parts.append("{}<-{}".format(i, inp.name()))
 
-    # Inputs
-    inputs = []
-    for i in range(len(node.inputs())):
-        inp = node.input(i)
-        inputs.append({
-            "index": i,
-            "connected": inp is not None,
-            "source": inp.path() if inp else None,
-        })
-    if inputs:
-        info["inputs"] = inputs
-
-    # Outputs
-    outputs = []
+    out_parts = []
     for conn in node.outputConnections():
         dest = conn.outputNode()
-        outputs.append({
-            "output_index": conn.outputIndex(),
-            "dest": dest.path() if dest else None,
-            "dest_input": conn.inputIndex(),
-        })
-    if outputs:
-        info["outputs"] = outputs
+        if dest:
+            out_parts.append("{}->{}".format(conn.outputIndex(), dest.name()))
 
-    # Parameters
+    conn_str = ""
+    if inp_parts:
+        conn_str += " in[" + ", ".join(inp_parts) + "]"
+    if out_parts:
+        conn_str += " out[" + ", ".join(out_parts) + "]"
+    if not inp_parts and not out_parts:
+        conn_str = " (disconnected)"
+
+    result = "{} ({}){}".format(name, type_name, conn_str)
+
+    # Add key parameters (only most important ones)
     if include_parms:
-        parms = {}
-        for parm in node.parms():
-            try:
-                val = parm.eval()
-                expr = parm.expression()
-                if expr:
-                    parms[parm.name()] = {"value": val, "expression": expr}
-                else:
-                    parms[parm.name()] = val
-            except Exception:
-                pass
-        info["parameters"] = parms
+        key_parms = _get_key_parms(node)
+        if key_parms:
+            parm_str = ", ".join(
+                "{}={}".format(k, v) for k, v in key_parms.items()
+            )
+            result += " | " + parm_str
 
-    # Comment
-    comment = node.comment()
-    if comment:
-        info["comment"] = comment
+    return result
 
-    # Children (recursive)
-    if depth > 0:
-        children = node.children()
-        if children:
-            info["children"] = [
-                _serialize_node(c, include_parms=False, depth=depth - 1)
-                for c in children[:30]
-            ]
 
-    return info
+def _get_key_parms(node):
+    """Get a compact dict of the most important parameters."""
+    KEY_PARM_NAMES = {
+        # Geometry
+        "sizex", "sizey", "sizez", "scale", "rad", "rows", "cols",
+        "height", "freq", "offset", "dist", "divisions",
+        "npoints", "seed",
+        # Transform
+        "tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz",
+        # VEX
+        "snippet", "group", "grouptype", "class",
+        # Copy
+        "ncopies", "input",
+        # Display
+        "display", "outputidx",
+        # Volume
+        "voxelsize", "isovalue",
+        # Operation
+        "operation", "pulldir", "invert",
+    }
+
+    parms = {}
+    for parm in node.parms():
+        name = parm.name()
+        if name not in KEY_PARM_NAMES:
+            continue
+        try:
+            val = parm.eval()
+            if isinstance(val, float):
+                val = round(val, 4)
+            parms[name] = val
+        except Exception:
+            pass
+
+    return parms

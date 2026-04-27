@@ -8,6 +8,9 @@ from .acpy import is_acpy_prompt, strip_acpy_prefix, build_acpy_system_addition
 from .permissions import confirm_batch_operations, auto_save_hip, has_write_operations
 from .config import load_config, get_active_provider
 
+# Max auto-retries for run_python errors before giving up
+_MAX_AUTO_RETRIES = 2
+
 
 class Agent:
     """State-machine agent: alternates between background HTTP and main-thread tools."""
@@ -18,7 +21,6 @@ class Agent:
         self.on_tool_call = on_tool_call or (lambda n, a: None)
         self.on_error = on_error or (lambda e: None)
         self.on_token_update = on_token_update or (lambda i, o: None)
-        # Called when an HTTP round finishes — triggers main-thread processing
         self.on_request_done = on_request_done or (lambda: None)
 
         self.messages = []
@@ -31,11 +33,11 @@ class Agent:
         self.max_tool_rounds = 10
 
         # State for the conversation loop
-        self._user_text = ""
         self._sys_prompt = ""
         self._write_confirmed = False
         self._tools = []
         self._active = False
+        self._retry_count = 0
 
     def reset(self):
         self.messages = []
@@ -74,10 +76,9 @@ class Agent:
         self.context_text = build_scene_context()
         return self.context_text
 
-    # ---- State machine: start conversation ----
+    # ---- State machine ----
 
     def start_conversation(self, user_text):
-        """Initialize state and kick off the first HTTP request (background)."""
         if self.provider is None:
             self.setup_provider()
 
@@ -97,12 +98,11 @@ class Agent:
         self._tools = get_ai_tools()
         self._write_confirmed = False
         self._active = True
+        self._retry_count = 0
 
-        # Start first HTTP round
         self._start_http_round()
 
     def _start_http_round(self):
-        """Launch HTTP request in a background thread."""
         import threading
 
         messages = list(self.messages)
@@ -126,8 +126,6 @@ class Agent:
         threading.Thread(target=http_request, daemon=True).start()
 
     def _on_http_response(self, response):
-        """Called from background thread when HTTP response arrives."""
-        # Track tokens
         usage = response.get("usage", {})
         self.total_input_tokens += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)
@@ -140,7 +138,6 @@ class Agent:
             self.on_response(text)
 
         if not tool_calls:
-            # No tools — store assistant message and finish
             if "raw_assistant" in response:
                 self.messages.append({
                     "role": "assistant",
@@ -153,7 +150,6 @@ class Agent:
             self.on_request_done()
             return
 
-        # Store assistant message with tool calls
         if "raw_assistant" in response:
             self.messages.append({
                 "role": "assistant",
@@ -163,19 +159,15 @@ class Agent:
         else:
             self.messages.append({"role": "assistant", "content": text})
 
-        # Store tool calls for main-thread execution
         self._pending_ops = []
         for tc in tool_calls:
-            tool_name = tc["name"]
-            tool_args = tc["arguments"]
-            self._pending_ops.append((tool_name, tc["id"], tool_args))
-            self.on_tool_call(tool_name, tool_args)
+            self._pending_ops.append((tc["name"], tc["id"], tc["arguments"]))
+            self.on_tool_call(tc["name"], tc["arguments"])
 
-        # Signal main thread to process tool calls
         self.on_request_done()
 
     def execute_pending_tools(self):
-        """Called on main thread after on_request_done signal."""
+        """Main thread: execute tools, auto-retry on run_python errors."""
         if not self._active or not hasattr(self, '_pending_ops'):
             return
 
@@ -199,25 +191,59 @@ class Agent:
                         "content": "User denied this operation.",
                         "tool_use_id": tool_id,
                     })
-                # Continue to next round
                 self._start_http_round()
                 return
             self._write_confirmed = True
 
-        # Execute tools on main thread
+        # Execute tools
+        had_error = False
         for tool_name, tool_id, tool_args in ops:
             success, result = execute_tool(tool_name, tool_args)
             if not success:
                 self.on_error(result)
+                had_error = True
+
+            # Feature 4: Auto-retry — inject scene state on run_python errors
+            if tool_name == "run_python" and not success:
+                self._retry_count += 1
+                if self._retry_count <= _MAX_AUTO_RETRIES:
+                    scene_hint = self._get_error_context_hint()
+                    result += (
+                        "\n\n[SYSTEM] This error occurred during execution (attempt {}/{}). "
+                        "Current scene state:\n{}".format(
+                            self._retry_count, _MAX_AUTO_RETRIES, scene_hint)
+                    )
+
             self.messages.append({
                 "role": "tool_result",
                 "content": result,
                 "tool_use_id": tool_id,
             })
 
-        # Next HTTP round
         if self._active:
             self._start_http_round()
+
+    def _get_error_context_hint(self):
+        """Get a brief snapshot of current scene for error recovery."""
+        try:
+            import hou
+            parts = []
+            obj = hou.node("/obj")
+            if obj:
+                for child in obj.children()[:10]:
+                    parts.append(child.path() + " [" + child.type().name() + "]")
+                    for sub in child.children()[:20]:
+                        inputs = sub.inputs()
+                        inp_str = ""
+                        if inputs:
+                            inp_str = " <- " + ", ".join(
+                                i.name() for i in inputs if i
+                            )
+                        parts.append("  {} ({}){}".format(
+                            sub.name(), sub.type().name(), inp_str))
+            return "\n".join(parts) if parts else "Empty scene"
+        except Exception:
+            return "Unable to read scene state"
 
 
 def _short_args(args, max_len=80):

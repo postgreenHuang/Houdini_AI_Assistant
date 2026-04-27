@@ -257,10 +257,12 @@ def _node_knowledge_base():
         "- ALWAYS create nodes upstream to downstream.\n"
         "- ALWAYS cap the chain with a Null node at the end.\n"
         "- ALWAYS include a report with print() showing the full connection chain.\n"
-        "- If parameter errors are reported, offer to fix them in a follow-up run_python call.\n"
+        "- If parameter errors are reported, fix them in a follow-up run_python call.\n"
         "- After execution, the system auto-checks for disconnected nodes. Fix any warnings.\n"
+        "- If run_python fails, the system auto-injects current scene state. Read it and fix.\n"
+        "- **Complex tasks (>5 nodes):** Split into stages. First create the core chain, "
+        "verify it works, then add secondary nodes. Don't try to build everything in one script.\n"
         "- Respond in the same language the user uses.\n\n"
 
         + _node_knowledge_base()
-    )
     )
