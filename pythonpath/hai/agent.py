@@ -1,6 +1,5 @@
 """Agent core — message loop, tool dispatch, conversation management."""
 
-import threading
 from .providers import get_provider
 from .tools import get_ai_tools, execute_tool
 from .roles import build_system_prompt
@@ -34,11 +33,6 @@ class Agent:
         self.role = "assistant"
         self.context_text = ""
         self.max_tool_rounds = 10
-
-        # Mechanism to run tools on main thread (hou API is not thread-safe)
-        self._tool_queue = []        # [(tool_name, tool_args), ...]
-        self._tool_results = []      # [(success, result), ...]
-        self._tool_event = threading.Event()
 
     def reset(self):
         """Clear conversation history."""
@@ -87,38 +81,10 @@ class Agent:
         self.context_text = build_scene_context()
         return self.context_text
 
-    def flush_tool_queue(self):
-        """Called on main thread via QTimer to execute queued tools safely."""
-        if not self._tool_queue:
-            return
-        for tool_name, tool_args in self._tool_queue:
-            success, result = execute_tool(tool_name, tool_args)
-            self._tool_results.append((success, result))
-        self._tool_queue = []
-        self._tool_event.set()
-
-    def _execute_tools_on_main_thread(self, ops):
-        """Queue tools for main-thread execution and wait for results.
-
-        Called from background thread. Blocks until main thread finishes.
-        Returns list of (success, result) tuples.
-        """
-        self._tool_queue = [(name, args) for name, _, _, args in ops]
-        self._tool_results = []
-        self._tool_event.clear()
-
-        # Schedule flush on main thread via on_tool_call callback
-        # (which emits a Qt Signal → main thread)
-        self.on_tool_call("__flush__", {})
-
-        # Block background thread until main thread finishes
-        self._tool_event.wait(timeout=300)
-        return self._tool_results
-
     def send_message(self, user_text):
         """Send a user message and process the full response loop.
 
-        Returns the final text response.
+        Runs entirely on the main thread. UI updates are deferred via QTimer.
         """
         if self.provider is None:
             self.setup_provider()
@@ -144,7 +110,7 @@ class Agent:
         tools = get_ai_tools()
         final_text = ""
         cfg = load_config()
-        write_confirmed = False  # confirm once per conversation turn
+        write_confirmed = False
 
         for round_num in range(self.max_tool_rounds):
             try:
@@ -156,7 +122,6 @@ class Agent:
             except Exception as e:
                 error_msg = "AI Provider Error: {}".format(str(e))
                 self.on_error(error_msg)
-                # Remove the failed user message
                 if self.messages and self.messages[-1]["role"] == "user":
                     self.messages.pop()
                 return error_msg
@@ -177,10 +142,7 @@ class Agent:
 
             # If no tool calls, we're done
             if not tool_calls:
-                # Store assistant message
-                if "raw_content" in response:
-                    self.messages.append({"role": "assistant", "content": response["raw_content"]})
-                elif "raw_assistant" in response:
+                if "raw_assistant" in response:
                     self.messages.append({
                         "role": "assistant",
                         "content": text,
@@ -190,11 +152,8 @@ class Agent:
                     self.messages.append({"role": "assistant", "content": text})
                 break
 
-            # Process tool calls
             # Store assistant message with tool calls
-            if "raw_content" in response:
-                self.messages.append({"role": "assistant", "content": response["raw_content"]})
-            elif "raw_assistant" in response:
+            if "raw_assistant" in response:
                 self.messages.append({
                     "role": "assistant",
                     "content": text,
@@ -203,7 +162,7 @@ class Agent:
             else:
                 self.messages.append({"role": "assistant", "content": text})
 
-            # Build operation list for batch confirmation
+            # Build operation list
             ops = []
             for tc in tool_calls:
                 tool_name = tc["name"]
@@ -212,7 +171,7 @@ class Agent:
                 ops.append((tool_name, desc, tc["id"], tool_args))
                 self.on_tool_call(tool_name, tool_args)
 
-            # Confirm write operations: once per conversation turn
+            # Confirm write operations
             has_writes = has_write_operations(tool_calls)
             if has_writes and not write_confirmed:
                 auto_save_hip()
@@ -227,14 +186,9 @@ class Agent:
                     continue
                 write_confirmed = True
 
-            # Execute tools on the MAIN thread (hou API is not thread-safe)
-            results = self._execute_tools_on_main_thread(ops)
-
-            for i, (tool_name, desc, tool_id, tool_args) in enumerate(ops):
-                if i < len(results):
-                    success, result = results[i]
-                else:
-                    success, result = False, "Tool execution timed out"
+            # Execute tools directly on main thread
+            for tool_name, desc, tool_id, tool_args in ops:
+                success, result = execute_tool(tool_name, tool_args)
                 if not success:
                     self.on_error(result)
 

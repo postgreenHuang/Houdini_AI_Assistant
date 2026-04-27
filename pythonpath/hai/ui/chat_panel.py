@@ -2,7 +2,6 @@
 
 import os
 import json
-import threading
 import tempfile
 import subprocess
 import hou
@@ -93,32 +92,17 @@ class ExternalEditorDialog(QDialog):
 class ChatPanel(QWidget):
     """Main AI chat panel for Houdini."""
 
-    # Signals for thread-safe UI updates (emitted from background thread,
-    # received on main thread by connected slots)
-    _sig_response = Signal(str)
-    _sig_tool_call = Signal(str, str)
-    _sig_error = Signal(str)
-    _sig_done = Signal()
-    _sig_token = Signal(int, int)
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self._is_processing = False
         self._had_response = False
         self._current_session_id = None
 
-        # Connect signals to UI update methods (main thread)
-        self._sig_response.connect(self._ui_add_response)
-        self._sig_tool_call.connect(self._ui_add_tool_call)
-        self._sig_error.connect(self._ui_add_error)
-        self._sig_done.connect(self._ui_on_done)
-        self._sig_token.connect(self._ui_update_tokens)
-
         self.agent = Agent(
-            on_response=lambda text: self._sig_response.emit(text),
-            on_tool_call=lambda name, args: self._sig_tool_call.emit(name, json.dumps(args, default=str)),
-            on_error=lambda msg: self._sig_error.emit(msg),
-            on_token_update=lambda i, o: self._sig_token.emit(i, o),
+            on_response=lambda text: self._ui_add_response(text),
+            on_tool_call=lambda name, args: self._ui_add_tool_call(name, json.dumps(args, default=str)),
+            on_error=lambda msg: self._ui_add_error(msg),
+            on_token_update=lambda i, o: self._ui_update_tokens(i, o),
         )
         self._setup_agent()
         self._build_ui()
@@ -437,19 +421,16 @@ class ChatPanel(QWidget):
         self._do_send(text)
 
     def _do_send(self, text):
-        """Send text to agent in a background thread."""
+        """Send text to agent. Runs on main thread — safe for hou API calls."""
         self._add_message("user", text)
         self._set_processing(True)
 
-        def run():
-            try:
-                self.agent.send_message(text)
-            except Exception as e:
-                self._sig_error.emit("Error: {}".format(str(e)))
-            finally:
-                self._sig_done.emit()
-
-        threading.Thread(target=run, daemon=True).start()
+        try:
+            self.agent.send_message(text)
+        except Exception as e:
+            self._ui_add_error("Error: {}".format(str(e)))
+        finally:
+            self._ui_on_done()
 
     def _analyze_selection(self):
         if self._is_processing:
@@ -503,14 +484,6 @@ class ChatPanel(QWidget):
         self._add_message("assistant", text)
 
     def _ui_add_tool_call(self, tool_name, args_json):
-        if tool_name == "__flush__":
-            try:
-                self.agent.flush_tool_queue()
-            except Exception as e:
-                self._ui_add_error("Tool execution error: {}".format(e))
-                self.agent._tool_results = [(False, str(e))]
-                self.agent._tool_event.set()
-            return
         short = args_json if len(args_json) <= 100 else args_json[:100] + "..."
         self._add_message("assistant", "Calling tool: **{}**({})".format(tool_name, short))
 
