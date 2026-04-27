@@ -301,20 +301,26 @@ class ChatPanel(QWidget):
         )
         content.setFrameShape(QFrame.NoFrame)
         content.setStyleSheet("background: transparent; border: none; padding: 0;")
-        # Simple markdown: convert **bold** and newlines
         content.setHtml(self._markdown_to_html(text))
-        content.document().setTextWidth(self.msg_container.width() - 40)
-        doc_height = content.document().size().height()
-        content.setFixedHeight(max(30, int(doc_height) + 10))
+        # Defer height calc to avoid issues during init (width=0)
+        self._adjust_text_height(content)
         blayout.addWidget(content)
 
         self.msg_layout.addWidget(bubble)
 
-        # Auto-scroll
-        QApplication.processEvents()
-        self.scroll_area.verticalScrollBar().setValue(
-            self.scroll_area.verticalScrollBar().maximum()
-        )
+        # Auto-scroll (deferred to avoid blocking during init)
+        from ..qt_compat import QTimer
+        QTimer.singleShot(0, lambda: self.scroll_area.verticalScrollBar().setValue(
+            self.scroll_area.verticalScrollBar().maximum()))
+
+    def _adjust_text_height(self, content):
+        """Set QTextEdit height based on document content."""
+        width = self.msg_container.width() - 40
+        if width < 100:
+            width = 500
+        content.document().setTextWidth(width)
+        doc_height = content.document().size().height()
+        content.setFixedHeight(max(30, int(doc_height) + 10))
 
     def _markdown_to_html(self, text):
         """Basic markdown-to-HTML conversion."""
@@ -497,6 +503,10 @@ class ChatPanel(QWidget):
         self._add_message("assistant", text)
 
     def _ui_add_tool_call(self, tool_name, args_json):
+        # Special signal: flush tool queue on main thread
+        if tool_name == "__flush__":
+            self.agent.flush_tool_queue()
+            return
         short = args_json if len(args_json) <= 100 else args_json[:100] + "..."
         self._add_message("assistant", "Calling tool: **{}**({})".format(tool_name, short))
 
@@ -505,10 +515,15 @@ class ChatPanel(QWidget):
         frame.setObjectName("errorMessage")
         fl = QVBoxLayout(frame)
         fl.setContentsMargins(8, 6, 8, 6)
-        lbl = QLabel("Error: " + msg)
-        lbl.setWordWrap(True)
-        lbl.setStyleSheet("background: transparent;")
-        fl.addWidget(lbl)
+
+        content = QTextEdit()
+        content.setReadOnly(True)
+        content.setPlainText("Error: " + msg)
+        content.setFrameShape(QFrame.NoFrame)
+        content.setStyleSheet("background: transparent; border: none; padding: 0;")
+        self._adjust_text_height(content)
+        fl.addWidget(content)
+
         self.msg_layout.addWidget(frame)
 
     def _ui_on_done(self):

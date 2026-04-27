@@ -4,6 +4,7 @@ from ..qt_compat import (
     Qt, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox,
     QCheckBox, QGroupBox, QDialog, QTabWidget, QApplication,
+    QScrollArea, QFrame,
 )
 from ..ui.styles import get_stylesheet
 from ..config import load_config, save_config, DEFAULT_CONFIG
@@ -51,9 +52,12 @@ class SettingsDialog(QDialog):
     def _build_provider_tab(self):
         w = QWidget()
         layout = QVBoxLayout(w)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        # Active provider selector
-        form = QFormLayout()
+        # Active provider selector (fixed at top)
+        top_bar = QWidget()
+        top_form = QFormLayout(top_bar)
+        top_form.setContentsMargins(8, 8, 8, 4)
 
         self.provider_combo = QComboBox()
         for p in self.PROVIDERS:
@@ -61,11 +65,20 @@ class SettingsDialog(QDialog):
         current = self._cfg.get("provider", "claude")
         idx = self.PROVIDERS.index(current) if current in self.PROVIDERS else 0
         self.provider_combo.setCurrentIndex(idx)
-        form.addRow("Active Provider:", self.provider_combo)
+        top_form.addRow("Active Provider:", self.provider_combo)
 
-        layout.addLayout(form)
+        layout.addWidget(top_bar)
 
-        # Per-provider config: URL + Key + Model for each
+        # Scrollable area for provider configs
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(8, 4, 8, 8)
+        scroll_layout.setSpacing(8)
+
         providers_cfg = self._cfg.get("providers", {})
         self._provider_inputs = {}
 
@@ -75,8 +88,11 @@ class SettingsDialog(QDialog):
 
             group = QGroupBox(p.upper())
             gform = QFormLayout(group)
+            gform.setLabelAlignment(Qt.AlignRight)
+            gform.setFormAlignment(Qt.AlignLeft)
 
             url_input = QLineEdit()
+            url_input.setPlaceholderText(defaults.get("url", ""))
             url_input.setText(pcfg.get("url", defaults.get("url", "")))
             gform.addRow("URL:", url_input)
 
@@ -86,6 +102,7 @@ class SettingsDialog(QDialog):
             gform.addRow("API Key:", key_input)
 
             model_input = QLineEdit()
+            model_input.setPlaceholderText(defaults.get("model", ""))
             model_input.setText(pcfg.get("model", defaults.get("model", "")))
             gform.addRow("Model:", model_input)
 
@@ -95,9 +112,11 @@ class SettingsDialog(QDialog):
                 "model": model_input,
             }
 
-            layout.addWidget(group)
+            scroll_layout.addWidget(group)
 
-        layout.addStretch()
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll, 1)
         return w
 
     # ---- Prompt tab ----

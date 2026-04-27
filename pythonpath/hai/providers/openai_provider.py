@@ -24,9 +24,13 @@ class OpenAIProvider(ProviderInterface):
             self.api_base = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
             self.model = self.model or "glm-5.1"
         elif self.provider_name == "custom":
-            self.api_base = self._custom_url
+            url = self._custom_url.rstrip("/")
+            if url.endswith("/chat/completions"):
+                self.api_base = url
+            else:
+                self.api_base = url + "/chat/completions"
             self.model = self.model or "custom-model"
-            if not self.api_base:
+            if not self._custom_url:
                 raise ValueError("Custom provider requires an API URL in settings.")
         else:
             self.api_base = "https://api.openai.com/v1/chat/completions"
@@ -37,6 +41,11 @@ class OpenAIProvider(ProviderInterface):
             "Content-Type": "application/json",
             "Authorization": "Bearer {}".format(self.api_key),
         }
+
+        # OpenRouter requires these extra headers
+        if "openrouter.ai" in self.api_base:
+            headers["HTTP-Referer"] = "https://github.com/postgreenHuang/Houdini_AI_Assistant"
+            headers["X-Title"] = "Houdini AI Assistant"
 
         formatted = self._format_messages(messages, system_prompt)
 
@@ -49,21 +58,42 @@ class OpenAIProvider(ProviderInterface):
         if tools:
             body["tools"] = [self._format_tool(t) for t in tools]
 
+        body_bytes = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
             self.api_base,
-            data=json.dumps(body).encode("utf-8"),
+            data=body_bytes,
             headers=headers,
             method="POST",
         )
 
+        raw = ""
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            import ssl
+            try:
+                ctx = ssl.create_default_context()
+                resp = urllib.request.urlopen(req, timeout=120, context=ctx)
+            except ssl.SSLError:
+                # Fallback: skip verification (some corporate envs / old Houdini)
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                resp = urllib.request.urlopen(req, timeout=120, context=ctx)
+
+            raw = resp.read().decode("utf-8").strip()
+            if not raw:
+                raise RuntimeError(
+                    "{} returned empty response (url: {})".format(
+                        self.provider_name, self.api_base))
+            data = json.loads(raw)
         except urllib.error.HTTPError as e:
             error_body = e.read().decode("utf-8") if e.fp else ""
             raise RuntimeError("{} API error ({}): {}".format(self.provider_name, e.code, error_body))
-        except urllib.error.URLError as e:
-            raise RuntimeError("Network error: {}".format(e.reason))
+        except json.JSONDecodeError as e:
+            raise RuntimeError("{} returned non-JSON ({} chars): {} ... (url: {})".format(
+                self.provider_name, len(raw), raw[:300], self.api_base))
+        except Exception as e:
+            raise RuntimeError("{} request failed: {} (url: {})".format(
+                type(e).__name__, e, self.api_base))
 
         return self._parse_response(data)
 
