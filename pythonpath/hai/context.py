@@ -4,6 +4,45 @@ import json
 import hou
 
 
+def build_lightweight_context():
+    """Lightweight scene snapshot auto-injected into every user message."""
+    lines = []
+
+    # Current network path
+    try:
+        pane = hou.ui.paneTabOfType(hou.paneTabType.NetworkEditor)
+        if pane:
+            pwd = pane.pwd()
+            net_type = pwd.type().name() if pwd else ""
+            lines.append("Network: {} ({} network)".format(pwd.path(), net_type))
+    except Exception:
+        pass
+
+    # Selected nodes
+    try:
+        sel = hou.selectedNodes()
+        if sel:
+            parts = ["{} ({})".format(n.name(), n.type().name()) for n in sel[:8]]
+            lines.append("Selected: " + ", ".join(parts))
+    except Exception:
+        pass
+
+    # Children of current network
+    try:
+        pane = hou.ui.paneTabOfType(hou.paneTabType.NetworkEditor)
+        if pane:
+            children = pane.pwd().children()
+            if children:
+                names = [c.name() for c in children[:15]]
+                suffix = ", ..." if len(children) > 15 else ""
+                lines.append("Children ({}): {}{}".format(
+                    len(children), ", ".join(names), suffix))
+    except Exception:
+        pass
+
+    return "\n".join(lines) if lines else ""
+
+
 def build_selection_context():
     """Build context from currently selected nodes."""
     nodes = hou.selectedNodes()

@@ -21,7 +21,9 @@ class SessionSidebar(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("sessionSidebar")
-        self.setFixedWidth(200)
+        self._collapsed = False
+        self._expanded_width = 200
+        self.setFixedWidth(self._expanded_width)
         self.setStyleSheet(get_sidebar_style())
         self._build_ui()
         self.refresh()
@@ -31,8 +33,14 @@ class SessionSidebar(QFrame):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
-        # Header: New Chat + Toggle
+        # Header: Toggle + New Chat
         header = QHBoxLayout()
+        btn_toggle = QPushButton("<<")
+        btn_toggle.setObjectName("toggleBtn")
+        btn_toggle.setToolTip("Collapse sidebar")
+        btn_toggle.clicked.connect(self.toggle_collapse)
+        header.addWidget(btn_toggle)
+
         btn_new = QPushButton("+ New")
         btn_new.setObjectName("newChatBtn")
         btn_new.clicked.connect(lambda: self.new_chat_requested.emit())
@@ -82,6 +90,27 @@ class SessionSidebar(QFrame):
         if item:
             return item.data(Qt.UserRole)
         return None
+
+    def toggle_collapse(self):
+        self._collapsed = not self._collapsed
+        if self._collapsed:
+            self.setFixedWidth(32)
+            self.list_widget.hide()
+            self.findChild(QPushButton, "newChatBtn").hide()
+            self.findChild(QPushButton, "toggleBtn").setText(">>")
+            self.findChild(QPushButton, "toggleBtn").setToolTip("Expand sidebar")
+            # Hide bottom buttons
+            for btn in self.findChildren(QPushButton):
+                if btn.objectName() not in ("toggleBtn",):
+                    btn.hide()
+        else:
+            self.setFixedWidth(self._expanded_width)
+            self.list_widget.show()
+            self.findChild(QPushButton, "newChatBtn").show()
+            self.findChild(QPushButton, "toggleBtn").setText("<<")
+            self.findChild(QPushButton, "toggleBtn").setToolTip("Collapse sidebar")
+            for btn in self.findChildren(QPushButton):
+                btn.show()
 
     def _on_item_clicked(self, item):
         session_id = item.data(Qt.UserRole)
@@ -155,6 +184,16 @@ def get_sidebar_style():
     }
     QPushButton#newChatBtn:hover {
         background: #3478c2;
+    }
+    QPushButton#toggleBtn {
+        background: transparent;
+        border: none;
+        color: #888;
+        padding: 4px;
+        font-size: 11px;
+    }
+    QPushButton#toggleBtn:hover {
+        color: #6ab0f3;
     }
     QListWidget#sessionList {
         background: #2a2a2a;

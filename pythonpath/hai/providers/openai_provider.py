@@ -113,11 +113,14 @@ class OpenAIProvider(ProviderInterface):
                     "content": content,
                 })
             elif role == "assistant" and msg.get("tool_calls"):
-                formatted.append({
+                m = {
                     "role": "assistant",
                     "content": content if isinstance(content, str) else None,
                     "tool_calls": msg["tool_calls"],
-                })
+                }
+                if msg.get("reasoning_content"):
+                    m["reasoning_content"] = msg["reasoning_content"]
+                formatted.append(m)
             elif role == "assistant" and isinstance(content, list):
                 # Anthropic-format content blocks, extract text
                 text = "".join(b.get("text", "") for b in content if b.get("type") == "text")
@@ -139,9 +142,15 @@ class OpenAIProvider(ProviderInterface):
                         "tool_calls": tool_calls,
                     })
                 else:
-                    formatted.append({"role": "assistant", "content": text})
+                    m = {"role": "assistant", "content": text}
+                    if msg.get("reasoning_content"):
+                        m["reasoning_content"] = msg["reasoning_content"]
+                    formatted.append(m)
             else:
-                formatted.append({"role": role, "content": content})
+                m = {"role": role, "content": content}
+                if role == "assistant" and msg.get("reasoning_content"):
+                    m["reasoning_content"] = msg["reasoning_content"]
+                formatted.append(m)
 
         return formatted
 
@@ -181,6 +190,10 @@ class OpenAIProvider(ProviderInterface):
 
         # Store raw assistant message for continuing conversation
         raw_assistant = dict(message)
+        # Preserve reasoning_content for DeepSeek thinking mode
+        reasoning = message.get("reasoning_content")
+        if reasoning:
+            raw_assistant["reasoning_content"] = reasoning
         if tool_calls:
             raw_assistant["tool_calls"] = [
                 {

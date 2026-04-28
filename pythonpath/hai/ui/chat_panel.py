@@ -98,6 +98,7 @@ class ChatPanel(QWidget):
     _sig_done = Signal()
     _sig_token = Signal(int, int)
     _sig_tools_ready = Signal()
+    _sig_status = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -113,6 +114,7 @@ class ChatPanel(QWidget):
         self._sig_token.connect(self._ui_update_tokens)
         # Tool execution trigger — main thread picks up pending tools
         self._sig_tools_ready.connect(self._ui_execute_tools)
+        self._sig_status.connect(self._ui_update_status)
 
         self.agent = Agent(
             on_response=lambda text: self._sig_response.emit(text),
@@ -120,6 +122,7 @@ class ChatPanel(QWidget):
             on_error=lambda msg: self._sig_error.emit(msg),
             on_token_update=lambda i, o: self._sig_token.emit(i, o),
             on_request_done=lambda: self._sig_tools_ready.emit(),
+            on_status=lambda s: self._sig_status.emit(s),
         )
         self._setup_agent()
         self._build_ui()
@@ -190,12 +193,6 @@ class ChatPanel(QWidget):
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(8, 4, 8, 4)
 
-        # New Chat
-        btn_new = QPushButton("+ New Chat")
-        btn_new.setToolTip("Start a new conversation")
-        btn_new.clicked.connect(self._new_chat)
-        layout.addWidget(btn_new)
-
         # Context status
         self.ctx_label = QLabel("Context: None")
         self.ctx_label.setObjectName("contextLabel")
@@ -210,6 +207,16 @@ class ChatPanel(QWidget):
             self.role_combo.addItem(role_name, role_id)
         self.role_combo.currentIndexChanged.connect(self._on_role_changed)
         layout.addWidget(self.role_combo)
+
+        # Language selector
+        layout.addWidget(QLabel("Lang:"))
+        self.lang_combo = QComboBox()
+        self.lang_combo.addItem("Auto", "auto")
+        self.lang_combo.addItem("中文", "zh")
+        self.lang_combo.addItem("English", "en")
+        self.lang_combo.addItem("日本語", "ja")
+        self.lang_combo.currentIndexChanged.connect(self._on_lang_changed)
+        layout.addWidget(self.lang_combo)
 
         # Clear chat
         btn_clear = QPushButton("Clear")
@@ -258,6 +265,11 @@ class ChatPanel(QWidget):
 
         btn_row.addStretch()
 
+        # Status indicator
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("statusLabel")
+        btn_row.addWidget(self.status_label)
+
         # Token counter
         self.token_label = QLabel("Tokens: 0 / 0")
         self.token_label.setObjectName("tokenLabel")
@@ -269,10 +281,10 @@ class ChatPanel(QWidget):
         btn_input.clicked.connect(self._open_input_dialog)
         btn_row.addWidget(btn_input)
 
-        # Send button
+        # Send / Stop button
         self.send_btn = QPushButton("Send")
         self.send_btn.setObjectName("sendButton")
-        self.send_btn.clicked.connect(self._send_message)
+        self.send_btn.clicked.connect(self._on_send_or_stop)
         self.send_btn.setDefault(True)
         btn_row.addWidget(self.send_btn)
 
@@ -437,6 +449,21 @@ class ChatPanel(QWidget):
         self.input_box.clear()
         self._do_send(text)
 
+    def _on_send_or_stop(self):
+        if self._is_processing:
+            self._stop_agent()
+        else:
+            self._send_message()
+
+    def _stop_agent(self):
+        self.agent.cancel()
+        self._add_message("assistant", "_Stopped._")
+        self._set_processing(False)
+        try:
+            self._save_current_session()
+        except Exception:
+            pass
+
     def _do_send(self, text):
         """Start agent conversation — state machine handles the rest."""
         self._add_message("user", text)
@@ -467,6 +494,9 @@ class ChatPanel(QWidget):
         role_id = self.role_combo.currentData()
         self.agent.role = role_id
 
+    def _on_lang_changed(self, index):
+        self.agent.language = self.lang_combo.currentData()
+
     def _open_settings(self):
         from .settings import SettingsDialog
         dlg = SettingsDialog(self)
@@ -485,8 +515,24 @@ class ChatPanel(QWidget):
     def _set_processing(self, active):
         self._is_processing = active
         self._had_response = False
-        self.send_btn.setEnabled(not active)
-        self.send_btn.setText("Processing..." if active else "Send")
+        if active:
+            self.send_btn.setEnabled(True)
+            self.send_btn.setText("Stop")
+            self.send_btn.setObjectName("dangerButton")
+        else:
+            self.send_btn.setEnabled(True)
+            self.send_btn.setText("Send")
+            self.send_btn.setObjectName("sendButton")
+            self.status_label.setText("")
+        self.send_btn.setStyleSheet(get_stylesheet())
+
+    # ---- Keyboard ----
+
+    def keyPressEvent(self, event):
+        if self._is_processing and event.key() == Qt.Key_Escape:
+            self._stop_agent()
+            return
+        super().keyPressEvent(event)
 
     # ---- Signal slots (called on main thread, safe to update UI) ----
 
@@ -541,6 +587,9 @@ class ChatPanel(QWidget):
 
     def _ui_update_tokens(self, inp, out):
         self.token_label.setText("Tokens: {} in / {} out".format(inp, out))
+
+    def _ui_update_status(self, status):
+        self.status_label.setText(status)
 
 
 # ---- Houdini Python Panel Integration ----

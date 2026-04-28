@@ -3,7 +3,7 @@
 from .providers import get_provider
 from .tools import get_ai_tools, execute_tool
 from .roles import build_system_prompt
-from .context import build_selection_context, build_scene_context
+from .context import build_selection_context, build_scene_context, build_lightweight_context
 from .acpy import is_acpy_prompt, strip_acpy_prefix, build_acpy_system_addition
 from .permissions import confirm_batch_operations, auto_save_hip, has_write_operations
 from .config import load_config, get_active_provider
@@ -16,12 +16,13 @@ class Agent:
     """State-machine agent: alternates between background HTTP and main-thread tools."""
 
     def __init__(self, on_response=None, on_tool_call=None, on_error=None,
-                 on_token_update=None, on_request_done=None):
+                 on_token_update=None, on_request_done=None, on_status=None):
         self.on_response = on_response or (lambda t: None)
         self.on_tool_call = on_tool_call or (lambda n, a: None)
         self.on_error = on_error or (lambda e: None)
         self.on_token_update = on_token_update or (lambda i, o: None)
         self.on_request_done = on_request_done or (lambda: None)
+        self.on_status = on_status or (lambda s: None)
 
         self.messages = []
         self.total_input_tokens = 0
@@ -29,6 +30,7 @@ class Agent:
         self.provider = None
         self.system_prompt = ""
         self.role = "assistant"
+        self.language = "auto"
         self.context_text = ""
         self.max_tool_rounds = 10
 
@@ -37,6 +39,7 @@ class Agent:
         self._write_confirmed = False
         self._tools = []
         self._active = False
+        self._cancelled = False
         self._retry_count = 0
 
     def reset(self):
@@ -94,15 +97,42 @@ class Agent:
         if acpy_active:
             self._sys_prompt += build_acpy_system_addition()
 
+        # Language override
+        lang_map = {
+            "zh": "\n\nIMPORTANT: You MUST respond in Chinese (中文). Always use Chinese regardless of the user's language.",
+            "en": "\n\nIMPORTANT: You MUST respond in English. Always use English regardless of the user's language.",
+            "ja": "\n\nIMPORTANT: You MUST respond in Japanese (日本語). Always use Japanese regardless of the user's language.",
+        }
+        if self.language != "auto" and self.language in lang_map:
+            self._sys_prompt += lang_map[self.language]
+
+        # Auto-inject lightweight scene context
+        try:
+            light_ctx = build_lightweight_context()
+            if light_ctx:
+                user_text = light_ctx + "\n\n" + user_text
+        except Exception:
+            pass
+
         self.messages.append({"role": "user", "content": user_text})
         self._tools = get_ai_tools()
         self._write_confirmed = False
         self._active = True
+        self._cancelled = False
         self._retry_count = 0
 
         self._start_http_round()
 
+    def cancel(self):
+        """Cancel the current conversation loop."""
+        self._active = False
+        self._cancelled = True
+
     def _start_http_round(self):
+        if not self._active:
+            self.on_request_done()
+            return
+        self.on_status("Thinking...")
         import threading
 
         messages = list(self.messages)
@@ -126,6 +156,10 @@ class Agent:
         threading.Thread(target=http_request, daemon=True).start()
 
     def _on_http_response(self, response):
+        if not self._active:
+            self.on_request_done()
+            return
+
         usage = response.get("usage", {})
         self.total_input_tokens += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)
@@ -137,27 +171,20 @@ class Agent:
         if text:
             self.on_response(text)
 
+        # Build assistant message, preserving reasoning_content for DeepSeek
+        assistant_msg = {"role": "assistant", "content": text}
+        if "raw_assistant" in response:
+            assistant_msg["tool_calls"] = response["raw_assistant"].get("tool_calls")
+            if response["raw_assistant"].get("reasoning_content"):
+                assistant_msg["reasoning_content"] = response["raw_assistant"]["reasoning_content"]
+
         if not tool_calls:
-            if "raw_assistant" in response:
-                self.messages.append({
-                    "role": "assistant",
-                    "content": text,
-                    "tool_calls": response["raw_assistant"].get("tool_calls"),
-                })
-            else:
-                self.messages.append({"role": "assistant", "content": text})
+            self.messages.append(assistant_msg)
             self._active = False
             self.on_request_done()
             return
 
-        if "raw_assistant" in response:
-            self.messages.append({
-                "role": "assistant",
-                "content": text,
-                "tool_calls": response["raw_assistant"].get("tool_calls"),
-            })
-        else:
-            self.messages.append({"role": "assistant", "content": text})
+        self.messages.append(assistant_msg)
 
         self._pending_ops = []
         for tc in tool_calls:
@@ -171,6 +198,7 @@ class Agent:
         if not self._active or not hasattr(self, '_pending_ops'):
             return
 
+        self.on_status("Executing...")
         ops = self._pending_ops
         del self._pending_ops
 

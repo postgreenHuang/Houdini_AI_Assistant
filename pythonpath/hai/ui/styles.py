@@ -41,6 +41,12 @@ QLabel#tokenLabel {
     font-size: 10px;
 }
 
+QLabel#statusLabel {
+    color: #6ab0f3;
+    font-size: 11px;
+    font-style: italic;
+}
+
 /* Buttons */
 QPushButton {
     background-color: #3c3f41;
