@@ -170,6 +170,12 @@ class SettingsDialog(QDialog):
         self.max_nodes.setText(str(self._cfg.get("max_context_nodes", 50)))
         form.addRow("Max Context Nodes:", self.max_nodes)
 
+        # Max message rounds before compaction
+        self.max_rounds = QLineEdit()
+        self.max_rounds.setText(str(self._cfg.get("max_message_rounds", 20)))
+        self.max_rounds.setToolTip("Messages beyond this threshold will be auto-summarized")
+        form.addRow("Max Message Rounds:", self.max_rounds)
+
         layout.addLayout(form)
         layout.addStretch()
         return w
@@ -188,6 +194,11 @@ class SettingsDialog(QDialog):
             cfg["max_context_nodes"] = int(self.max_nodes.text().strip())
         except ValueError:
             cfg["max_context_nodes"] = 50
+
+        try:
+            cfg["max_message_rounds"] = max(5, int(self.max_rounds.text().strip()))
+        except ValueError:
+            cfg["max_message_rounds"] = 20
 
         # Per-provider config
         providers = {}

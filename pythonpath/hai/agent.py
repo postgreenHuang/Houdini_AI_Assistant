@@ -6,7 +6,7 @@ from .roles import build_system_prompt
 from .context import build_selection_context, build_scene_context, build_lightweight_context
 from .acpy import is_acpy_prompt, strip_acpy_prefix, build_acpy_system_addition
 from .permissions import confirm_batch_operations, auto_save_hip, has_write_operations
-from .config import load_config, get_active_provider
+from .config import load_config, get_active_provider, DEFAULT_CONFIG
 
 # Max auto-retries for run_python errors before giving up
 _MAX_AUTO_RETRIES = 2
@@ -115,6 +115,10 @@ class Agent:
             pass
 
         self.messages.append({"role": "user", "content": user_text})
+
+        # Compact old messages if over threshold
+        self._compact_messages()
+
         self._tools = get_ai_tools()
         self._write_confirmed = False
         self._active = True
@@ -272,6 +276,94 @@ class Agent:
             return "\n".join(parts) if parts else "Empty scene"
         except Exception:
             return "Unable to read scene state"
+
+    # ---- Message compaction ----
+
+    def _compact_messages(self):
+        """Compress old messages into a summary when conversation gets too long."""
+        try:
+            cfg = load_config()
+            max_rounds = cfg.get("max_message_rounds", 20)
+        except Exception:
+            max_rounds = 20
+        threshold = max_rounds * 3  # ~3 messages per round
+
+        if len(self.messages) <= threshold:
+            return
+
+        # Split: old messages to summarize, recent messages to keep
+        keep_count = max(max_rounds, len(self.messages) // 3)
+        old_msgs = self.messages[:-keep_count]
+        recent_msgs = self.messages[-keep_count:]
+
+        # Build text from old messages for summarization
+        summary_text = self._build_summary_text(old_msgs)
+        if not summary_text.strip():
+            self.messages = recent_msgs
+            return
+
+        # Try AI summarization
+        summary = self._request_summary(summary_text)
+
+        if summary:
+            # Replace old messages with compact summary
+            self.messages = [
+                {
+                    "role": "user",
+                    "content": "[Conversation History Summary]\n{}".format(summary),
+                },
+                {"role": "assistant", "content": "Understood, I have the context."},
+            ] + recent_msgs
+            self.on_status("History compressed")
+        else:
+            # Fallback: just truncate
+            self.messages = recent_msgs
+
+    def _build_summary_text(self, messages):
+        """Extract key content from messages for summarization."""
+        parts = []
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if not content:
+                continue
+            if role == "tool_result":
+                # Truncate long tool results
+                content = content[:200] + "..." if len(content) > 200 else content
+            elif role == "assistant":
+                # Truncate long assistant responses
+                content = content[:300] + "..." if len(content) > 300 else content
+            parts.append("[{}] {}".format(role, content))
+        return "\n".join(parts)
+
+    def _request_summary(self, text):
+        """Call AI to generate a summary of old conversation messages."""
+        import json
+        if not self.provider:
+            return None
+
+        # Truncate input if very long
+        if len(text) > 4000:
+            text = text[:4000] + "\n... (truncated)"
+
+        summary_prompt = (
+            "Summarize the following Houdini conversation in 3-5 sentences. "
+            "Include: what the user requested, what nodes were created/modified, "
+            "any errors encountered and how they were fixed, and the final result. "
+            "Be concise and factual.\n\n"
+            + text
+        )
+
+        try:
+            response = self.provider.send_message(
+                messages=[{"role": "user", "content": summary_prompt}],
+                tools=None,
+                system_prompt="You are a conversation summarizer. Be concise.",
+                max_tokens=500,
+            )
+            return response.get("content", "").strip()
+        except Exception:
+            return None
 
 
 def _short_args(args, max_len=80):

@@ -53,6 +53,7 @@ DEFAULT_CONFIG = {
     "allow_code_execution": False,
     "permission_level": "confirm",
     "max_context_nodes": 50,
+    "max_message_rounds": 20,
     "system_prompt": "",
     "response_style": "normal",
     "language": "zh",
