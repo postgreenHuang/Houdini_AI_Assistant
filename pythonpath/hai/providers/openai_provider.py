@@ -152,7 +152,24 @@ class OpenAIProvider(ProviderInterface):
                     m["reasoning_content"] = msg["reasoning_content"]
                 formatted.append(m)
 
-        return formatted
+        # Validate: strip orphan tool messages not preceded by assistant with tool_calls
+        cleaned = []
+        for m in formatted:
+            if m.get("role") == "tool":
+                # Check if previous message is assistant with tool_calls
+                if cleaned and cleaned[-1].get("role") == "assistant" and "tool_calls" in cleaned[-1]:
+                    cleaned.append(m)
+                # else: orphan tool message, skip it
+            else:
+                # If this is assistant with tool_calls, remove any trailing tool messages
+                # from previous round that were orphans
+                if m.get("role") == "assistant" and "tool_calls" in m:
+                    # Remove trailing orphan tools from before this assistant message
+                    while cleaned and cleaned[-1].get("role") == "tool":
+                        cleaned.pop()
+                cleaned.append(m)
+
+        return cleaned
 
     def _format_tool(self, tool):
         return {
