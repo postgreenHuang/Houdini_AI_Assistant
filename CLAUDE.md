@@ -12,7 +12,8 @@ Agent 可以查询场景状态、创建/删除/连接节点、修改参数、生
 |------|------|------|
 | v1.0 | ✅ 已完成 | 对话 + 场景操作 + 多后端 + 异步 UI |
 | v2.0 | ✅ 已完成 | 会话管理 + 调试 + AI 增强 + 稳定性 |
-| v2.1 | 📋 规划中 | 增量上下文 + HDA 生成 + Streaming |
+| v2.1 | ✅ 已完成 | 自动上下文 + Stop + DeepSeek V4 + 语言选择 + 侧边栏折叠 |
+| v2.2 | 📋 规划中 | 增量上下文缓存 + HDA 生成 + Streaming |
 
 ---
 
@@ -87,6 +88,60 @@ Agent 可以查询场景状态、创建/删除/连接节点、修改参数、生
 
 ---
 
+## v2.1 已完成功能
+
+### 自动上下文注入（省掉 Inspect 步骤）
+- `build_lightweight_context()`：每条用户消息自动附加当前网络路径 + 选中节点 + 子节点列表
+- AI 无需主动调用查询工具，直接看到场景状态
+- 三步工作流从 Think → Inspect → Execute 简化为 Think → Execute
+
+**文件**: `context.py`（新增 `build_lightweight_context`）, `agent.py`
+
+### Houdini 层级硬规则（system prompt）
+- 明确规定 SOP 节点必须创建在 `/obj/xxx/` 下面
+- 错误示例：`hou.node('/obj').createNode('box')` — 禁止
+- 正确示例：`geo = hou.node('/obj/geo1'); box = geo.createNode('box')`
+- 提供 `pwd()` API 获取用户当前网络路径
+
+**文件**: `roles.py`（`_default_base_prompt` 新增 Hierarchy 段落）
+
+### Stop 按钮 + Escape 键
+- Processing 时 Send 按钮变为红色 "Stop"（dangerButton 样式）
+- 点击 Stop 或按 Escape 取消当前 Agent 循环
+- `agent.cancel()` 设置 `_active = False`，后续 HTTP/tool 步骤自动跳过
+
+**文件**: `agent.py`（`cancel` 方法）, `ui/chat_panel.py`（`_on_send_or_stop`, `_stop_agent`, `keyPressEvent`）
+
+### DeepSeek V4 Pro 思考模式兼容
+- 保留 API 响应中的 `reasoning_content` 字段
+- 在消息历史中原样传回 `reasoning_content` + `tool_calls`
+- 兼容 DeepSeek 思考模式的完整消息链要求
+
+**文件**: `providers/openai_provider.py`（`_parse_response`, `_format_messages`）, `agent.py`（`_on_http_response`）
+
+### 语言选择器
+- 顶栏新增语言下拉框：Auto / 中文 / English / 日本語
+- 非 Auto 模式在 system prompt 追加强制语言指令
+- 解决 Houdini 输入英文但期望中文回复的场景
+
+**文件**: `ui/chat_panel.py`（`lang_combo`）, `agent.py`（language 注入）
+
+### 状态指示器
+- 底栏显示 "Thinking..." / "Executing..." 蓝色斜体文字
+- Agent 各阶段自动更新状态
+- 完成后自动清空
+
+**文件**: `agent.py`（`on_status` 回调）, `ui/chat_panel.py`（`status_label`）, `ui/styles.py`
+
+### UI 优化
+- 侧边栏可折叠：`<<` / `>>` 按钮切换，折叠后仅 32px 宽
+- 去掉 top bar 重复的 "+ New Chat" 按钮（侧边栏已有）
+- 修复 `_default_base_prompt` 未定义的 NameError
+
+**文件**: `ui/session_sidebar.py`（`toggle_collapse`）, `ui/chat_panel.py`
+
+---
+
 ## v1.0 已完成功能
 
 ### 核心架构
@@ -126,11 +181,11 @@ Agent 可以查询场景状态、创建/删除/连接节点、修改参数、生
 
 ---
 
-## v2.1 规划
+## v2.2 规划
 
-### 1. 增量上下文更新 — P1
+### 1. 增量上下文缓存 — P1
 
-**现状**: 每次 Analyze 都重新序列化整个场景，浪费 token。
+**现状**: 自动上下文每次重新采集，未利用缓存。
 
 **方案**:
 - 维护 `context_cache`，记录上次发送的上下文快照
@@ -233,3 +288,7 @@ pythonpath/hai/
 ### hou.undo 在 Python Panel 下崩溃 — 已确认
 **原因**: hou.undo.begin/end 与 Python Panel 执行环境不兼容
 **方案**: 已移除 undo block，依赖执行前自动保存 hip 作为回退
+
+### DeepSeek V4 Pro 旧会话报错 — 已解决
+**原因**: v2.0 的 assistant 消息不存储 `tool_calls` 和 `reasoning_content`，旧会话切换到 DeepSeek 后 API 报 400
+**方案**: v2.1 完整存储 `reasoning_content` + `tool_calls`；旧会话需开新对话
