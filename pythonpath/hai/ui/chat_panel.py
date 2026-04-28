@@ -9,7 +9,7 @@ from ..qt_compat import (
     Qt, Signal, QWidget, QDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTextEdit, QComboBox,
     QFrame, QScrollArea, QSizePolicy, QPlainTextEdit,
-    QApplication,
+    QApplication, QMessageBox,
 )
 from ..ui.styles import get_stylesheet
 from ..ui.session_sidebar import SessionSidebar
@@ -350,6 +350,13 @@ class ChatPanel(QWidget):
         return html
 
     def _clear_chat(self):
+        reply = QMessageBox.question(
+            self, "Clear Chat",
+            "Clear all messages in this conversation?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
         # Remove all message widgets
         while self.msg_layout.count():
             item = self.msg_layout.takeAt(0)
