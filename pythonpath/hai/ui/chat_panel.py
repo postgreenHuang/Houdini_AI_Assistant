@@ -17,49 +17,6 @@ from ..config import load_config, save_config
 from ..session import create_session, save_session, load_session
 
 
-class InputDialog(QDialog):
-    """Popup text input dialog — supports CJK / Chinese input via native Qt IME."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Input")
-        self.setMinimumWidth(420)
-        self.setMinimumHeight(200)
-        self.setStyleSheet(get_stylesheet())
-        self._text = ""
-
-        layout = QVBoxLayout(self)
-
-        self._edit = QPlainTextEdit()
-        self._edit.setPlaceholderText("Type your message here...")
-        self._edit.setFocus()
-        layout.addWidget(self._edit)
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-
-        btn_cancel = QPushButton("Cancel")
-        btn_cancel.clicked.connect(self.reject)
-        btn_row.addWidget(btn_cancel)
-
-        btn_send = QPushButton("Send")
-        btn_send.setObjectName("sendButton")
-        btn_send.setDefault(True)
-        btn_send.clicked.connect(self._accept)
-        btn_row.addWidget(btn_send)
-
-        layout.addLayout(btn_row)
-
-    def _accept(self):
-        self._text = self._edit.toPlainText().strip()
-        if self._text:
-            self.accept()
-
-    @property
-    def text(self):
-        return self._text
-
-
 class ChatPanel(QWidget):
     """Main AI chat panel for Houdini."""
 
@@ -484,12 +441,22 @@ class ChatPanel(QWidget):
             self._setup_agent()
 
     def _open_input_dialog(self):
-        """Open external editor (Notepad) for CJK input."""
+        """Open Houdini native text input for CJK / Chinese input."""
         if self._is_processing:
             return
-        dlg = InputDialog(self)
-        if dlg.exec_():
-            self._do_send(dlg.text)
+        try:
+            btn, text = hou.ui.readInput(
+                "Enter your message:",
+                title="AI Assistant Input",
+                buttons=("Send", "Cancel"),
+                default_choice=0,
+                close_choice=1,
+                multi_line_input=True,
+            )
+            if btn == 0 and text and text.strip():
+                self._do_send(text.strip())
+        except Exception:
+            pass
 
     def _set_processing(self, active):
         self._is_processing = active
