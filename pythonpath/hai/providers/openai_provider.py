@@ -152,22 +152,75 @@ class OpenAIProvider(ProviderInterface):
                     m["reasoning_content"] = msg["reasoning_content"]
                 formatted.append(m)
 
-        # Validate: strip orphan tool messages not preceded by assistant with tool_calls
+        # Validate message sequence for API compliance
+        return self._validate_sequence(formatted)
+
+    @staticmethod
+    def _validate_sequence(messages):
+        """Ensure tool messages are paired correctly with tool_calls.
+
+        Rules:
+        1. Every tool message must follow an assistant with tool_calls
+        2. Every tool_call_id in an assistant message must have a matching tool response
+        3. Orphan tool messages (no preceding tool_calls) are removed
+        4. Unanswered tool_calls have dummy tool responses added
+        """
         cleaned = []
-        for m in formatted:
-            if m.get("role") == "tool":
-                # Check if previous message is assistant with tool_calls
-                if cleaned and cleaned[-1].get("role") == "assistant" and "tool_calls" in cleaned[-1]:
-                    cleaned.append(m)
-                # else: orphan tool message, skip it
+        for msg in messages:
+            if msg.get("role") == "tool":
+                # Check if we're inside a tool_calls block (last assistant had tool_calls)
+                if cleaned and cleaned[-1].get("role") == "tool":
+                    # Consecutive tool messages — check if any preceding assistant has tool_calls
+                    has_tc = False
+                    for prev in reversed(cleaned):
+                        if prev.get("role") == "assistant" and "tool_calls" in prev:
+                            has_tc = True
+                            break
+                        if prev.get("role") == "user" or prev.get("role") == "system":
+                            break
+                    if has_tc:
+                        cleaned.append(msg)
+                    # else: orphan tool, skip
+                elif cleaned and cleaned[-1].get("role") == "assistant" and "tool_calls" in cleaned[-1]:
+                    cleaned.append(msg)
+                # else: orphan tool message, skip
             else:
-                # If this is assistant with tool_calls, remove any trailing tool messages
-                # from previous round that were orphans
-                if m.get("role") == "assistant" and "tool_calls" in m:
-                    # Remove trailing orphan tools from before this assistant message
-                    while cleaned and cleaned[-1].get("role") == "tool":
-                        cleaned.pop()
-                cleaned.append(m)
+                # Before adding a non-tool message, close any pending tool_calls
+                if (msg.get("role") in ("user", "assistant", "system") and
+                        cleaned and cleaned[-1].get("role") == "assistant" and
+                        "tool_calls" in cleaned[-1]):
+                    # Check which tool_call_ids are missing responses
+                    expected_ids = {tc["id"] for tc in cleaned[-1].get("tool_calls", [])}
+                    answered_ids = set()
+                    for prev in reversed(cleaned):
+                        if prev.get("role") == "tool":
+                            answered_ids.add(prev.get("tool_call_id", ""))
+                        else:
+                            break
+                    missing = expected_ids - answered_ids
+                    for mid in missing:
+                        cleaned.append({
+                            "role": "tool",
+                            "tool_call_id": mid,
+                            "content": "Tool execution skipped.",
+                        })
+                cleaned.append(msg)
+
+        # Final check: if last message is assistant with tool_calls, add dummy responses
+        if cleaned and cleaned[-1].get("role") == "assistant" and "tool_calls" in cleaned[-1]:
+            expected_ids = {tc["id"] for tc in cleaned[-1].get("tool_calls", [])}
+            answered_ids = set()
+            for prev in reversed(cleaned[:-1]):
+                if prev.get("role") == "tool":
+                    answered_ids.add(prev.get("tool_call_id", ""))
+                else:
+                    break
+            for mid in expected_ids - answered_ids:
+                cleaned.append({
+                    "role": "tool",
+                    "tool_call_id": mid,
+                    "content": "Tool execution skipped.",
+                })
 
         return cleaned
 
