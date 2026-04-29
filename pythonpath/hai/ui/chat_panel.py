@@ -445,18 +445,21 @@ class ChatPanel(QWidget):
         if self._is_processing:
             return
         try:
-            btn, text = hou.ui.readInput(
-                "Enter your message:",
+            btn, contents = hou.ui.readMultiInput(
+                "Type your message:",
+                input_labels=["Message"],
                 title="AI Assistant Input",
                 buttons=("Send", "Cancel"),
                 default_choice=0,
                 close_choice=1,
-                multi_line_input=True,
             )
-            if btn == 0 and text and text.strip():
-                self._do_send(text.strip())
-        except Exception:
-            pass
+            if btn == 0 and contents and contents[0].strip():
+                self._do_send(contents[0].strip())
+        except Exception as e:
+            try:
+                hou.ui.setStatusMessage("Input dialog error: {}".format(str(e)))
+            except Exception:
+                pass
 
     def _set_processing(self, active):
         self._is_processing = active
