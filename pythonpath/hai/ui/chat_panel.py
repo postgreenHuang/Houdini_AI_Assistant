@@ -2,8 +2,6 @@
 
 import os
 import json
-import tempfile
-import subprocess
 import hou
 from ..qt_compat import (
     Qt, Signal, QWidget, QDialog, QVBoxLayout, QHBoxLayout,
@@ -19,70 +17,43 @@ from ..config import load_config, save_config
 from ..session import create_session, save_session, load_session
 
 
-class ExternalEditorDialog(QDialog):
-    """Open a temp file in system editor (Notepad) for CJK input, then read it back."""
+class InputDialog(QDialog):
+    """Popup text input dialog — supports CJK / Chinese input via native Qt IME."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("External Editor")
-        self.setMinimumWidth(360)
+        self.setWindowTitle("Input")
+        self.setMinimumWidth(420)
+        self.setMinimumHeight(200)
         self.setStyleSheet(get_stylesheet())
         self._text = ""
 
-        # Create temp file
-        tmp_dir = tempfile.gettempdir()
-        self._filepath = os.path.join(tmp_dir, "hai_input.txt")
-        with open(self._filepath, "w", encoding="utf-8") as f:
-            f.write("")
-
         layout = QVBoxLayout(self)
 
-        info = QLabel("An editor window has opened.\n"
-                      "Type your message there, save (Ctrl+S), then click **Read & Send** below.")
-        info.setWordWrap(True)
-        layout.addWidget(info)
+        self._edit = QPlainTextEdit()
+        self._edit.setPlaceholderText("Type your message here...")
+        self._edit.setFocus()
+        layout.addWidget(self._edit)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
         btn_cancel = QPushButton("Cancel")
-        btn_cancel.clicked.connect(self._cleanup_and_reject)
+        btn_cancel.clicked.connect(self.reject)
         btn_row.addWidget(btn_cancel)
 
-        btn_send = QPushButton("Read & Send")
+        btn_send = QPushButton("Send")
         btn_send.setObjectName("sendButton")
         btn_send.setDefault(True)
-        btn_send.clicked.connect(self._read_and_accept)
+        btn_send.clicked.connect(self._accept)
         btn_row.addWidget(btn_send)
 
         layout.addLayout(btn_row)
 
-        # Open system editor
-        self._proc = subprocess.Popen(["notepad", self._filepath])
-
-    def _read_and_accept(self):
-        try:
-            with open(self._filepath, "r", encoding="utf-8") as f:
-                self._text = f.read().strip()
-        except Exception:
-            self._text = ""
-        self._cleanup()
+    def _accept(self):
+        self._text = self._edit.toPlainText().strip()
         if self._text:
             self.accept()
-
-    def _cleanup_and_reject(self):
-        self._cleanup()
-        self.reject()
-
-    def _cleanup(self):
-        try:
-            self._proc.terminate()
-        except Exception:
-            pass
-        try:
-            os.remove(self._filepath)
-        except Exception:
-            pass
 
     @property
     def text(self):
@@ -243,6 +214,7 @@ class ChatPanel(QWidget):
         self.input_box.setMaximumHeight(80)
         self.input_box.setMinimumHeight(40)
         self.input_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.input_box.setAttribute(Qt.WA_InputMethodEnabled, True)
         layout.addWidget(self.input_box)
 
         # Button row
@@ -515,7 +487,7 @@ class ChatPanel(QWidget):
         """Open external editor (Notepad) for CJK input."""
         if self._is_processing:
             return
-        dlg = ExternalEditorDialog(self)
+        dlg = InputDialog(self)
         if dlg.exec_():
             self._do_send(dlg.text)
 
