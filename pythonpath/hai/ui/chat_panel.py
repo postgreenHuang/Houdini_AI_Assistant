@@ -303,8 +303,8 @@ class ChatPanel(QWidget):
         """Start a new conversation session."""
         # Save current session first
         self._save_current_session()
-        # Create new session
-        self._current_session_id = create_session()
+        # Lazy: don't create file until there's actual content
+        self._current_session_id = None
         self.agent.reset()
         self.token_label.setText("Tokens: 0 / 0")
         # Clear messages
@@ -349,12 +349,12 @@ class ChatPanel(QWidget):
         self.sidebar.refresh(highlight_id=session_id)
 
     def _save_current_session(self):
-        """Auto-save the current session."""
-        if not self._current_session_id:
-            return
+        """Auto-save the current session. Creates session file lazily."""
         msgs = self.agent.get_messages()
         if not msgs:
             return
+        if not self._current_session_id:
+            self._current_session_id = create_session()
         save_session(
             self._current_session_id,
             msgs,
